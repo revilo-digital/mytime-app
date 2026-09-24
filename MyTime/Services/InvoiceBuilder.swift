@@ -74,7 +74,7 @@ enum InvoiceBuilder {
     /// Billable minutes for one entry: whole minutes as shown on the timesheet,
     /// rounded up to the billing increment if one is set.
     static func billableMinutes(_ entry: TimeEntry, roundingMinutes: Int) -> Int {
-        let minutes = Int(entry.liveDuration().rounded(.down)) / 60
+        let minutes = BillingSummary.wholeMinutes(entry)
         guard roundingMinutes > 0 else { return minutes }
         return Int((Double(minutes) / Double(roundingMinutes)).rounded(.up)) * roundingMinutes
     }
@@ -87,7 +87,7 @@ enum InvoiceBuilder {
     /// Money for a time quantity. Snaps to whole minutes and multiplies before dividing
     /// so 0:41 at $150 is exactly $102.50.
     static func amount(hours: Decimal, rate: Decimal) -> Decimal {
-        Money.round(Decimal(HoursFormat.minutes(hours)) * rate / 60)
+        BillingSummary.amount(minutes: HoursFormat.minutes(hours), rate: rate)
     }
 
     static func hourlyLines(for entries: [TimeEntry], grouping: LineGrouping, roundingMinutes: Int,
