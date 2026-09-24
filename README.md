@@ -6,10 +6,9 @@ I'd used Harvest for years. It's a good product, but most of what I paid for was
 invoice PDF. MyTime does those three things natively on the Mac. It has no account and no server, and your data
 never leaves your machine unless you back it up to iCloud Drive yourself.
 
-![Menu bar states: idle, stopped with today's total, and running](docs/menu-bar.png)
+![MyTime's weekly timesheet with the menu bar timer open](docs/screenshot.png)
 
-*The menu bar item in light and dark mode. From left to right: nothing tracked today, stopped (outlined, showing
-today's total), and running (filled, showing the current timer).*
+*The weekly timesheet, with the timer popover open from the menu bar. The data is demo data.*
 
 ## Features
 
