@@ -55,11 +55,18 @@ struct TimesheetLogicTests {
         #expect(BillingSummary.uninvoicedAmount(all) == 300)
     }
 
-    @Test func uninvoicedRoundsPerEntryToCents() {
+    @Test func uninvoicedRoundsToCents() {
         hourlyTask.rateOverride = 100
-        _ = entry(hourlyTask, hours: 1.0 / 3)    // 33.333… → 33.33
+        _ = entry(hourlyTask, hours: 1.0 / 3)    // 0:20 → 33.333… → 33.33
         let all = (try? context.fetch(FetchDescriptor<TimeEntry>())) ?? []
         #expect(BillingSummary.uninvoicedAmount(all) == Decimal(string: "33.33")!)
+    }
+
+    @Test func uninvoicedBillsWholeMinutesLikeInvoices() {
+        // 2:36:53 at $150: seconds would give $392.22, but invoices bill 2:36 = $390.00.
+        _ = entry(hourlyTask, hours: (156 * 60 + 53) / 3600)
+        let all = (try? context.fetch(FetchDescriptor<TimeEntry>())) ?? []
+        #expect(BillingSummary.uninvoicedAmount(all) == 390)
     }
 
     @Test func weekStartsOnMonday() {

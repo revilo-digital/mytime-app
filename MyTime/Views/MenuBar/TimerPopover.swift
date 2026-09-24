@@ -13,7 +13,6 @@ struct TimerPopover: View {
     @AppStorage(TimerService.lastTaskKey) private var lastTaskID = ""
     @State private var selectedTask: TaskType?
     @State private var note = ""
-    @State private var confirmDiscard = false
     @State private var editingID: PersistentIdentifier?
     @State private var addingEntry = false
 
@@ -60,7 +59,7 @@ struct TimerPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             if let active = timer.activeEntry {
-                RunningTimerView(timer: timer, entry: active, onDiscard: { confirmDiscard = true })
+                RunningTimerView(timer: timer, entry: active)
             } else {
                 startView
             }
@@ -101,11 +100,6 @@ struct TimerPopover: View {
         .onChange(of: selectedTask?.persistentModelID) {
             // Remember picks straight away, even before Start is pressed.
             if let selectedTask { timer.remember(selectedTask) }
-        }
-        .confirmationDialog("Discard the running timer?", isPresented: $confirmDiscard) {
-            Button("Discard", role: .destructive) { timer.cancel() }
-        } message: {
-            Text("The time tracked on this entry will be deleted.")
         }
     }
 
@@ -229,7 +223,8 @@ struct TimerPopover: View {
 private struct RunningTimerView: View {
     let timer: TimerService
     @Bindable var entry: TimeEntry
-    var onDiscard: () -> Void
+
+    @State private var confirmDiscard = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -261,21 +256,43 @@ private struct RunningTimerView: View {
 
             NoteField(text: $entry.note, placeholder: "Add a note")
 
-            HStack(spacing: 10) {
-                Button {
-                    timer.stop()
-                } label: {
-                    Label("Stop", systemImage: "stop.fill").frame(maxWidth: .infinity)
+            // Confirm inline: a confirmationDialog from the menu bar window never runs its action.
+            if confirmDiscard {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Discard the running timer?").font(.callout.weight(.semibold))
+                    Text("The time tracked on this entry will be deleted.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        Spacer()
+                        Button("Keep") { confirmDiscard = false }
+                            .keyboardShortcut(.cancelAction)
+                        Button("Discard", role: .destructive) { timer.cancel() }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.red)
+                    }
                 }
-                .controlSize(.extraLarge)
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                Button(role: .destructive, action: onDiscard) {
-                    Image(systemName: "trash")
-                }
-                .controlSize(.extraLarge)
-                .help("Discard this timer")
+            } else {
+                actions
             }
+        }
+        .onChange(of: entry.persistentModelID) { confirmDiscard = false }
+    }
+
+    private var actions: some View {
+        HStack(spacing: 10) {
+            Button {
+                timer.stop()
+            } label: {
+                Label("Stop", systemImage: "stop.fill").frame(maxWidth: .infinity)
+            }
+            .controlSize(.extraLarge)
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.defaultAction)
+            Button(role: .destructive) { confirmDiscard = true } label: {
+                Image(systemName: "trash")
+            }
+            .controlSize(.extraLarge)
+            .help("Discard this timer")
         }
     }
 }
@@ -328,12 +345,7 @@ private struct PopoverEntryRow: View {
         }
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.15), value: isEditing)
-        .confirmationDialog("Delete this entry?", isPresented: $confirmDelete) {
-            Button("Delete", role: .destructive) {
-                if entry.isRunning { timer.cancel() } else { context.delete(entry); try? context.save() }
-                isEditing = false
-            }
-        }
+        .onChange(of: isEditing) { confirmDelete = false }
     }
 
     private var summary: some View {
@@ -396,18 +408,40 @@ private struct PopoverEntryRow: View {
                 .padding(8)
                 .background(.background.opacity(0.5), in: .rect(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
-            HStack {
-                Button(role: .destructive) { confirmDelete = true } label: { Image(systemName: "trash") }
-                    .help("Delete entry")
-                Spacer()
-                Button("Cancel") { isEditing = false }
-                    .keyboardShortcut(.cancelAction)
-                Button("Save", action: save)
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(parsed == nil || task == nil)
+            // Confirm inline: a confirmationDialog from the menu bar window never runs its action.
+            if confirmDelete {
+                HStack {
+                    Text("Delete this entry?").font(.callout)
+                    Spacer()
+                    Button("Keep") { confirmDelete = false }
+                        .keyboardShortcut(.cancelAction)
+                    Button("Delete", role: .destructive, action: delete)
+                        .buttonStyle(.borderedProminent)
+                        .tint(.red)
+                }
+            } else {
+                actions
             }
         }
+    }
+
+    private var actions: some View {
+        HStack {
+            Button(role: .destructive) { confirmDelete = true } label: { Image(systemName: "trash") }
+                .help("Delete entry")
+            Spacer()
+            Button("Cancel") { isEditing = false }
+                .keyboardShortcut(.cancelAction)
+            Button("Save", action: save)
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(parsed == nil || task == nil)
+        }
+    }
+
+    private func delete() {
+        if entry.isRunning { timer.cancel() } else { context.delete(entry); try? context.save() }
+        isEditing = false
     }
 
     private func toggle() {
