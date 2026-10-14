@@ -16,7 +16,7 @@ struct TimerPopover: View {
     @State private var editingID: PersistentIdentifier?
     @State private var addingEntry = false
 
-    /// Active tasks on active projects and clients, sorted by "Client / Project / Task".
+    /// Active tasks on active projects and clients, sorted by path ("Client / End client / Project / Task").
     private var tasks: [TaskType] {
         allTasks
             .filter(\.isSelectable)

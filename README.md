@@ -26,10 +26,15 @@ never leaves your machine unless you back it up to iCloud Drive yourself.
 - **Clients, projects and tasks**
   - Rates cascade from task to project to client.
   - Fixed-fee projects, client logos, and archiving.
+  - End clients, for agency work: tag a project with the client's own client (say, Globex through the agency
+    Acme). Projects group under each end client with its tracked and uninvoiced totals, and the timer shows
+    "Acme › Globex › Project".
   - A default task list you can apply across every project, with tools to merge old one-off tasks into it.
 - **Invoicing**
   - Build an invoice from tracked time or from scratch.
   - Group lines by project and task, or add fixed-amount lines.
+  - For agency clients, put lines under a heading per end client with its own subtotal, so the agency can bill
+    each of its clients.
   - Hours can be *billed*, *covered* by a fixed-fee line, or *written off*, so fixed-price work never leaves
     hours stuck as "uninvoiced".
   - Invoices are snapshotted, so changing a rate later never alters one you've already sent.

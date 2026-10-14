@@ -39,6 +39,22 @@ struct InvoiceBuilderTests {
         return e
     }
 
+    private func endClient(_ name: String) -> EndClient {
+        let endClient = EndClient(name: name, client: client)
+        context.insert(endClient)
+        return endClient
+    }
+
+    /// A task on a new hourly project for `endClient`.
+    private func task(for endClient: EndClient, project name: String) -> TaskType {
+        let project = Project(name: name, client: client)
+        project.endClient = endClient
+        let task = TaskType(name: "Dev", project: project)
+        context.insert(project)
+        context.insert(task)
+        return task
+    }
+
     private func unbilledTotal() -> Decimal {
         BillingSummary.uninvoicedAmount((try? context.fetch(FetchDescriptor<TimeEntry>())) ?? [])
     }
@@ -232,5 +248,77 @@ struct InvoiceBuilderTests {
         let nb = entry(dev, minutes: 1)
         nb.isBillable = false
         #expect(EntryAction.suggested(for: nb) == .skip)
+    }
+
+    // MARK: End clients
+
+    @Test func sectionsPutOwnWorkFirstThenEndClientsAToZ() {
+        let deal = task(for: endClient("Globex"), project: "Spring Campaign")
+        let store = task(for: endClient("Initech"), project: "Store")
+        let entries = [entry(store, minutes: 30), entry(deal, minutes: 60), entry(dev, minutes: 15)]
+        let lines = InvoiceBuilder.invoiceLines(bill: entries, fixed: [], grouping: .projectTask, roundingMinutes: 0, bySection: true)
+        #expect(lines.map(\.sectionTitle) == ["Acme", "Globex", "Initech"])
+        #expect(lines.map(\.groupTitle) == ["Support", "Spring Campaign", "Store"])
+    }
+
+    @Test func withoutSectionsProjectNamesKeepTheirEndClient() {
+        let deal = task(for: endClient("Globex"), project: "Spring Campaign")
+        let lines = InvoiceBuilder.invoiceLines(bill: [entry(deal, minutes: 60)], fixed: [], grouping: .projectTask, roundingMinutes: 0)
+        #expect(lines.map(\.groupTitle) == ["Globex – Spring Campaign"])
+        #expect(lines.map(\.sectionTitle) == [""])
+    }
+
+    @Test func noSectionsWhenNothingHasAnEndClient() {
+        let lines = InvoiceBuilder.invoiceLines(bill: [entry(dev, minutes: 60)], fixed: [FixedLineInput(description: "Fee", amount: 100)],
+                                                grouping: .projectTask, roundingMinutes: 0, bySection: true)
+        #expect(lines.allSatisfy { $0.sectionTitle.isEmpty })
+        #expect(InvoiceLayout.rows(for: lines).filter(\.isSection).isEmpty)
+    }
+
+    @Test func feesJoinTheirEndClientAndOtherLinesGoLast() {
+        let globex = endClient("Globex")
+        let deal = task(for: globex, project: "Spring Campaign")
+        let rescue = Project(name: "Loyalty App", client: client, billingType: .fixedFee)
+        rescue.endClient = globex
+        context.insert(rescue)
+        let store = task(for: endClient("Initech"), project: "Store")
+        let fixed = [
+            FixedLineInput(description: "Expenses", amount: 20),
+            FixedLineInput(description: "Loyalty App - agreed fee", amount: 5000, project: rescue),
+        ]
+        let lines = InvoiceBuilder.invoiceLines(bill: [entry(store, minutes: 30), entry(deal, minutes: 60)], fixed: fixed,
+                                                grouping: .projectTask, roundingMinutes: 0, bySection: true)
+        #expect(lines.map(\.description) == ["Loyalty App - agreed fee", "Dev", "Dev", "Expenses"])
+        #expect(lines.map(\.sectionTitle) == ["Globex", "Globex", "Initech", ""])
+        #expect(lines.map(\.kind) == [.fixed, .hourly, .hourly, .fixed])
+        #expect(InvoiceLayout.rows(for: lines).filter(\.isSection) == [
+            .section(title: "Globex", hours: 1, amount: 5150),
+            .section(title: "Initech", hours: Decimal(string: "0.5")!, amount: 75),
+            .section(title: "Other", hours: 0, amount: 20),
+        ])
+    }
+
+    @Test func sameProjectNameUnderTwoEndClientsStaysApart() {
+        let a = task(for: endClient("Globex"), project: "Website")
+        let b = task(for: endClient("Initech"), project: "Website")
+        let lines = InvoiceBuilder.invoiceLines(bill: [entry(b, minutes: 30), entry(a, minutes: 60)], fixed: [],
+                                                grouping: .projectTask, roundingMinutes: 0, bySection: true)
+        #expect(InvoiceLayout.rows(for: lines) == [
+            .section(title: "Globex", hours: 1, amount: 150),
+            .group(title: "Website", hours: 1, amount: 150),
+            .line(index: 0, striped: false),
+            .section(title: "Initech", hours: Decimal(string: "0.5")!, amount: 75),
+            .group(title: "Website", hours: Decimal(string: "0.5")!, amount: 75),
+            .line(index: 1, striped: false),
+        ])
+    }
+
+    @Test func createdInvoiceKeepsSections() {
+        let deal = task(for: endClient("Globex"), project: "Spring Campaign")
+        let invoice = InvoiceBuilder.createInvoice(client: client, bill: [entry(deal, minutes: 60), entry(dev, minutes: 30)], cover: [],
+                                                   grouping: .projectTask, bySection: true, fixedLines: [],
+                                                   settings: settings, context: context)
+        #expect(invoice.sortedLines.map(\.sectionTitle) == ["Acme", "Globex"])
+        #expect(invoice.subtotal == 225)
     }
 }

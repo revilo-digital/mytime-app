@@ -16,6 +16,9 @@ final class Client {
     @Relationship(deleteRule: .cascade, inverse: \Project.client)
     var projects: [Project] = []
 
+    @Relationship(deleteRule: .cascade, inverse: \EndClient.client)
+    var endClients: [EndClient] = []
+
     init(name: String, defaultRate: Decimal = 0) {
         self.name = name
         self.billingName = name

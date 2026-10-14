@@ -56,8 +56,11 @@ struct FixedLineInput: Identifiable, Equatable {
     var id = UUID()
     var description: String
     var amount: Decimal
+    /// The project an agreed fee is for, so it lands under that project's end client.
+    var project: Project?
 }
 
+/// One invoice line before it's saved. Fixed lines have no hours; `rate` holds their amount.
 struct LineSpec: Equatable {
     var description: String
     var hours: Decimal
@@ -65,6 +68,8 @@ struct LineSpec: Equatable {
     var amount: Decimal
     var groupTitle: String = ""
     var details: String = ""
+    var sectionTitle: String = ""
+    var kind: InvoiceLineKind = .hourly
 }
 
 @MainActor
@@ -90,35 +95,54 @@ enum InvoiceBuilder {
         BillingSummary.amount(minutes: HoursFormat.minutes(hours), rate: rate)
     }
 
+    /// Where a project's lines go on an invoice with end-client sections: the client's own work
+    /// under the client's name first (rank 0), then each end client A–Z (rank 1).
+    static func section(of project: Project?) -> (rank: Int, title: String) {
+        if let endClient = project?.endClient { return (1, endClient.name) }
+        return (0, project?.client?.name ?? "")
+    }
+
+    /// With `sections`, every line gets a section title (see `section(of:)`) and project names
+    /// drop their end client, which the section heading shows instead.
     static func hourlyLines(for entries: [TimeEntry], grouping: LineGrouping, roundingMinutes: Int,
-                            include: LineDetails = .standard) -> [LineSpec] {
-        struct Key: Hashable { var group: String; var label: String; var rate: Decimal; var index: Int }
+                            include: LineDetails = .standard, sections: Bool = false) -> [LineSpec] {
+        struct Key: Hashable { var section: String; var group: String; var label: String; var rate: Decimal; var index: Int }
+
+        func projectName(_ entry: TimeEntry) -> String {
+            (sections ? entry.task?.project?.name : entry.task?.project?.qualifiedName) ?? "Time"
+        }
 
         func key(_ entry: TimeEntry, index: Int) -> Key {
-            let project = entry.task?.project?.name ?? "Time"
+            let section = sections ? Self.section(of: entry.task?.project).title : ""
+            let project = projectName(entry)
             let task = entry.task?.name ?? ""
             var parts: [String] = []
             if include.contains(.project) { parts.append(project) }
             if include.contains(.task), !task.isEmpty { parts.append(task) }
             let rate = RateResolver.rate(for: entry.task)
             switch grouping {
-            case .projectTask: return Key(group: project, label: task.isEmpty ? project : task, rate: rate, index: 0)
+            case .projectTask: return Key(section: section, group: project, label: task.isEmpty ? project : task, rate: rate, index: 0)
             case .task:
                 if !include.contains(.task), !task.isEmpty, parts.isEmpty { parts.append(task) }
-                return Key(group: "", label: parts.isEmpty ? project : parts.joined(separator: " - "), rate: rate, index: 0)
-            case .project: return Key(group: "", label: project, rate: rate, index: 0)
-            case .single: return Key(group: "", label: "Professional services", rate: rate, index: 0)
+                return Key(section: section, group: "", label: parts.isEmpty ? project : parts.joined(separator: " - "), rate: rate, index: 0)
+            case .project: return Key(section: section, group: "", label: project, rate: rate, index: 0)
+            case .single: return Key(section: section, group: "", label: "Professional services", rate: rate, index: 0)
             case .entry:
                 if include.contains(.date) { parts.append(DateText.short(entry.date)) }
                 var label = parts.isEmpty ? "Time" : parts.joined(separator: " - ")
                 if include.contains(.notes), !entry.note.isEmpty { label += ": \(entry.note)" }
-                return Key(group: "", label: label, rate: rate, index: index) // keep entries distinct
+                return Key(section: section, group: "", label: label, rate: rate, index: index) // keep entries distinct
             }
         }
 
-        // Grouped by project, then chronological.
+        // Grouped by section, then project, then chronological.
         let sorted = entries.sorted {
-            let (p0, p1) = ($0.task?.project?.name ?? "", $1.task?.project?.name ?? "")
+            if sections {
+                let (s0, s1) = (Self.section(of: $0.task?.project), Self.section(of: $1.task?.project))
+                if s0.rank != s1.rank { return s0.rank < s1.rank }
+                if s0.title != s1.title { return s0.title.localizedStandardCompare(s1.title) == .orderedAscending }
+            }
+            let (p0, p1) = (projectName($0), projectName($1))
             if p0 != p1 { return p0.localizedStandardCompare(p1) == .orderedAscending }
             return ($0.date, $0.createdAt) < ($1.date, $1.createdAt)
         }
@@ -141,9 +165,10 @@ enum InvoiceBuilder {
 
         if grouping == .projectTask {
             // Within each project, order tasks by name so "1. Briefing" precedes "4. Technical".
-            let projects = order.map(\.group).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+            // Projects are told apart by section too: two end clients can each have a "Website".
+            let projects = order.map { [$0.section, $0.group] }.reduce(into: [[String]]()) { if !$0.contains($1) { $0.append($1) } }
             order = projects.flatMap { project in
-                order.filter { $0.group == project }
+                order.filter { [$0.section, $0.group] == project }
                     .sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
             }
         }
@@ -160,9 +185,40 @@ enum InvoiceBuilder {
             return LineSpec(
                 description: k.label, hours: qty, rate: k.rate, amount: amount(hours: qty, rate: k.rate),
                 groupTitle: k.group,
-                details: details.joined(separator: " · ")
+                details: details.joined(separator: " · "),
+                sectionTitle: k.section
             )
         }
+    }
+
+    /// Every line for a new invoice, in order. With `bySection`, if any of the work is for an end
+    /// client, lines go under a section per end client (see `section(of:)`): each section's fees
+    /// straight under its heading, then its hourly lines, and fixed lines without a project last.
+    static func invoiceLines(bill: [TimeEntry], fixed: [FixedLineInput], grouping: LineGrouping, roundingMinutes: Int,
+                             include: LineDetails = .standard, bySection: Bool = false) -> [LineSpec] {
+        let projects = bill.compactMap(\.task?.project) + fixed.compactMap(\.project)
+        let sectioned = bySection && projects.contains { $0.endClient != nil }
+        let hourly = hourlyLines(for: bill, grouping: grouping, roundingMinutes: roundingMinutes,
+                                 include: include, sections: sectioned)
+        let fees = fixed.map { line in
+            LineSpec(description: line.description, hours: 0, rate: line.amount, amount: Money.round(line.amount),
+                     sectionTitle: sectioned ? line.project.map { Self.section(of: $0).title } ?? "" : "", kind: .fixed)
+        }
+        guard sectioned else { return hourly + fees }
+
+        var rank = ["": 2]
+        for project in projects {
+            let section = Self.section(of: project)
+            rank[section.title] = section.rank
+        }
+        return (fees + hourly).enumerated().sorted { a, b in
+            let (sa, sb) = (a.element.sectionTitle, b.element.sectionTitle)
+            let (ra, rb) = (rank[sa] ?? 2, rank[sb] ?? 2)
+            if ra != rb { return ra < rb }
+            if sa != sb { return sa.localizedStandardCompare(sb) == .orderedAscending }
+            return a.offset < b.offset
+        }
+        .map(\.element)
     }
 
     // MARK: Create / recalculate / delete
@@ -173,6 +229,7 @@ enum InvoiceBuilder {
         cover: [TimeEntry],
         grouping: LineGrouping,
         include: LineDetails = .standard,
+        bySection: Bool = false,
         fixedLines: [FixedLineInput],
         issueDate: Date = .now,
         settings: BusinessSettings,
@@ -187,21 +244,15 @@ enum InvoiceBuilder {
         invoice.notes = settings.fill(settings.defaultInvoiceNotes)
         context.insert(invoice)
 
-        var order = 0
-        for spec in hourlyLines(for: bill, grouping: grouping, roundingMinutes: settings.roundingMinutes, include: include) {
-            let line = InvoiceLine(kind: .hourly, description: spec.description, quantity: spec.hours,
+        let specs = invoiceLines(bill: bill, fixed: fixedLines, grouping: grouping,
+                                 roundingMinutes: settings.roundingMinutes, include: include, bySection: bySection)
+        for (order, spec) in specs.enumerated() {
+            let line = InvoiceLine(kind: spec.kind, description: spec.description,
+                                   quantity: spec.kind == .hourly ? spec.hours : nil,
                                    unitPrice: spec.rate, amount: spec.amount, sortOrder: order,
-                                   groupTitle: spec.groupTitle, details: spec.details)
+                                   groupTitle: spec.groupTitle, details: spec.details, sectionTitle: spec.sectionTitle)
             line.invoice = invoice
             context.insert(line)
-            order += 1
-        }
-        for fixed in fixedLines {
-            let line = InvoiceLine(kind: .fixed, description: fixed.description, quantity: nil,
-                                   unitPrice: fixed.amount, amount: Money.round(fixed.amount), sortOrder: order)
-            line.invoice = invoice
-            context.insert(line)
-            order += 1
         }
 
         for entry in bill { attach(entry, to: invoice, as: .billed) }

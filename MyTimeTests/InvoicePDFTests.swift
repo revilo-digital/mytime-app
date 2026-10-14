@@ -57,10 +57,10 @@ struct InvoicePDFTests {
         #expect(rows == InvoiceLayout.rows(for: inv.sortedLines))
     }
 
-    @Test func noPageEndsWithAProjectHeading() {
+    @Test func noPageEndsWithAHeading() {
         let pages = InvoicePDF.pages(for: invoice(lineCount: 60, projects: 12))
-        for page in pages.dropLast() {
-            if case .group = page.rows.last { Issue.record("Page \(page.number) ends with a heading") }
+        for page in pages.dropLast() where page.rows.last?.isHeading == true {
+            Issue.record("Page \(page.number) ends with a heading")
         }
     }
 
@@ -96,20 +96,25 @@ extension InvoicePDFTests {
         settings.bankAccount = "Name: Jane Doe\nNumber: 12-3456-7890123-00"
         settings.nextInvoiceNumber = 83
         client.billingName = "Acme"
-        let data: [(String, String, [(Double, String)])] = [
-            ("Spring Campaign", "2. Client workshop", [(1, ""), (0.5, "WIP"), (0.89, "End-to-end review"), (0.58, "Campaign WIP"), (0.61, "WIP")]),
-            ("Spring Campaign", "4. Technical implementation", [(0.75, "Changing 3 days to 7 day cut-off, FAQ update and link in header"), (0.25, "Copy changes"), (1, "GTM/GA4"), (0.25, "Setting up domain"), (1.75, "Production environment set up"), (1, "Confirmation email")]),
-            ("Spring Campaign", "Team meeting", [(0.12, "WIP")]),
-            ("Online Store", "1. Internal briefing", [(0.62, "Planning meeting")]),
-            ("Online Store", "4. Technical implementation", [(1.5, "Product importer"), (0.5, "Tweaking importer"), (1.29, "Building timeline"), (0.25, "Fixing product videos")]),
-            ("Team WIP", "Team meeting", [(0.57, "")]),
-            ("Support Retainer", "4. Technical implementation", [(0.5, "Tracking")]),
-            ("Support Retainer", "Research", [(0.25, "CMS plan")]),
+        let globex = EndClient(name: "Globex", client: client)
+        let initech = EndClient(name: "Initech", client: client)
+        context.insert(globex)
+        context.insert(initech)
+        let data: [(EndClient?, String, String, [(Double, String)])] = [
+            (globex, "Spring Campaign", "2. Client workshop", [(1, ""), (0.5, "WIP"), (0.89, "End-to-end review"), (0.58, "Campaign WIP"), (0.61, "WIP")]),
+            (globex, "Spring Campaign", "4. Technical implementation", [(0.75, "Changing 3 days to 7 day cut-off, FAQ update and link in header"), (0.25, "Copy changes"), (1, "GTM/GA4"), (0.25, "Setting up domain"), (1.75, "Production environment set up"), (1, "Confirmation email")]),
+            (globex, "Spring Campaign", "Team meeting", [(0.12, "WIP")]),
+            (initech, "Online Store", "1. Internal briefing", [(0.62, "Planning meeting")]),
+            (initech, "Online Store", "4. Technical implementation", [(1.5, "Product importer"), (0.5, "Tweaking importer"), (1.29, "Building timeline"), (0.25, "Fixing product videos")]),
+            (initech, "Support Retainer", "4. Technical implementation", [(0.5, "Tracking")]),
+            (initech, "Support Retainer", "Research", [(0.25, "CMS plan")]),
+            (nil, "Team WIP", "Team meeting", [(0.57, "")]),
         ]
         var projects: [String: Project] = [:]
         var entries: [TimeEntry] = []
-        for (projectName, taskName, items) in data {
+        for (endClient, projectName, taskName, items) in data {
             let project = projects[projectName] ?? Project(name: projectName, client: client)
+            project.endClient = endClient
             if projects[projectName] == nil { context.insert(project); projects[projectName] = project }
             let task = TaskType(name: taskName, project: project)
             context.insert(task)
@@ -119,8 +124,12 @@ extension InvoicePDFTests {
                 entries.append(e)
             }
         }
-        let inv = InvoiceBuilder.createInvoice(client: client, bill: entries, cover: [], grouping: .projectTask,
-                                               fixedLines: [], settings: settings, context: context)
+        let rescue = Project(name: "Loyalty App", client: client, billingType: .fixedFee)
+        rescue.endClient = globex
+        context.insert(rescue)
+        let inv = InvoiceBuilder.createInvoice(client: client, bill: entries, cover: [], grouping: .projectTask, bySection: true,
+                                               fixedLines: [FixedLineInput(description: "Loyalty App - agreed fee", amount: 5000, project: rescue)],
+                                               settings: settings, context: context)
         let path = ProcessInfo.processInfo.environment["MYTIME_SAMPLE_PDF"]!
         try InvoicePDF.write(inv, to: URL(fileURLWithPath: path))
     }

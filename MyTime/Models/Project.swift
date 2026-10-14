@@ -9,6 +9,8 @@ enum BillingType: String, Codable, CaseIterable {
 @Model
 final class Project {
     var client: Client?
+    /// Who the client is doing this work for, if anyone (e.g. Globex, through the agency Acme).
+    var endClient: EndClient?
     var name: String
     var code: String
     var billingTypeRaw: String
@@ -22,6 +24,11 @@ final class Project {
 
     @Relationship(deleteRule: .cascade, inverse: \TaskType.project)
     var tasks: [TaskType] = []
+
+    /// "Globex – Spring Campaign": the name with its end client, for places that don't show the end client separately.
+    var qualifiedName: String {
+        endClient.map { "\($0.name) – \(name)" } ?? name
+    }
 
     var billingType: BillingType {
         get { BillingType(rawValue: billingTypeRaw) ?? .hourly }

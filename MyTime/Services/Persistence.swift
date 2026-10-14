@@ -3,7 +3,7 @@ import SwiftData
 
 enum Persistence {
     static let schema = Schema([
-        Client.self, Project.self, TaskType.self, TimeEntry.self, Invoice.self, InvoiceLine.self,
+        Client.self, EndClient.self, Project.self, TaskType.self, TimeEntry.self, Invoice.self, InvoiceLine.self,
         BusinessSettings.self,
     ])
 

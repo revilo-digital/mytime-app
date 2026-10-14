@@ -40,8 +40,10 @@ struct InvoicePageView: View {
     @ViewBuilder
     private func rowView(_ row: InvoiceLayout.Row) -> some View {
         switch row {
+        case .section(let title, let hours, let amount):
+            HeadingRow(title: title, hours: hours, amount: amount, isSection: true)
         case .group(let title, let hours, let amount):
-            GroupRow(title: title, hours: hours, amount: amount)
+            HeadingRow(title: title, hours: hours, amount: amount, isSection: false)
         case .line(let index, let striped):
             LineRowView(line: lines[index], striped: striped, indented: !lines[index].groupTitle.isEmpty)
         }
@@ -149,19 +151,20 @@ private struct TableHeader: View {
     }
 }
 
-private struct GroupRow: View {
+/// An end-client (section) or project (group) heading with its subtotal.
+private struct HeadingRow: View {
     let title: String
     let hours: Decimal
     let amount: Decimal
+    let isSection: Bool
     private typealias L = InvoiceLayout
 
     var body: some View {
         HStack(spacing: 0) {
             Text(title)
-                .font(.system(size: L.groupSize, weight: .semibold))
                 .padding(.horizontal, L.cellPadding)
                 .frame(width: L.typeWidth + L.descriptionWidth, alignment: .leading)
-            Text(HoursFormat.clock(hours))
+            Text(hours > 0 ? HoursFormat.clock(hours) : "")
                 .padding(.horizontal, L.cellPadding)
                 .frame(width: L.quantityWidth, alignment: .trailing)
             Spacer().frame(width: L.priceWidth)
@@ -169,10 +172,10 @@ private struct GroupRow: View {
                 .padding(.horizontal, L.cellPadding)
                 .frame(width: L.amountWidth, alignment: .trailing)
         }
-        .font(.system(size: L.groupSize, weight: .semibold))
+        .font(.system(size: isSection ? L.sectionSize : L.groupSize, weight: isSection ? .bold : .semibold))
         .frame(maxHeight: .infinity)
-        .background(Color(white: 0.9))
-        .overlay(alignment: .bottom) { Rectangle().fill(Color(white: 0.8)).frame(height: 1) }
+        .background(Color(white: isSection ? 0.8 : 0.9))
+        .overlay(alignment: .bottom) { Rectangle().fill(Color(white: isSection ? 0.6 : 0.8)).frame(height: 1) }
     }
 }
 

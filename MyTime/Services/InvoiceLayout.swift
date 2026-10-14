@@ -1,6 +1,24 @@
 import AppKit
 import Foundation
 
+/// What the layout needs to know about a line to place headings and subtotals. Saved invoice
+/// lines and the New Invoice preview both lay out this way.
+protocol InvoiceLayoutLine {
+    var sectionTitle: String { get }
+    var groupTitle: String { get }
+    var amount: Decimal { get }
+    /// Hours counted towards heading subtotals; none for fixed lines.
+    var subtotalHours: Decimal { get }
+}
+
+extension InvoiceLine: InvoiceLayoutLine {
+    var subtotalHours: Decimal { quantity ?? 0 }
+}
+
+extension LineSpec: InvoiceLayoutLine {
+    var subtotalHours: Decimal { kind == .hourly ? hours : 0 }
+}
+
 /// Measures invoice rows and splits them into A4 pages. The page views and the PDF
 /// both use this, so preview and PDF are identical.
 enum InvoiceLayout {
@@ -23,6 +41,7 @@ enum InvoiceLayout {
     static let bodySize: CGFloat = 9
     static let detailSize: CGFloat = 8
     static let groupSize: CGFloat = 9.5
+    static let sectionSize: CGFloat = 10.5
 
     // Fixed block heights.
     static let firstPageHeaderHeight: CGFloat = 240
@@ -31,9 +50,25 @@ enum InvoiceLayout {
     static let rowVerticalPadding: CGFloat = 5
 
     enum Row: Equatable {
+        /// End-client heading.
+        case section(title: String, hours: Decimal, amount: Decimal)
+        /// Project heading.
         case group(title: String, hours: Decimal, amount: Decimal)
         case line(index: Int, striped: Bool)
+
+        var isHeading: Bool {
+            if case .line = self { return false }
+            return true
+        }
+
+        var isSection: Bool {
+            if case .section = self { return true }
+            return false
+        }
     }
+
+    /// Heading for lines outside every end-client section, e.g. a line added by hand.
+    static let otherSection = "Other"
 
     struct Page: Equatable {
         var number: Int
@@ -55,6 +90,8 @@ enum InvoiceLayout {
     static func height(of row: Row, lines: [InvoiceLine]) -> CGFloat {
         let width = descriptionWidth - cellPadding * 2
         switch row {
+        case .section(let title, _, _):
+            return textHeight(title, size: sectionSize, weight: .bold, width: width) + rowVerticalPadding * 2 + 4
         case .group(let title, _, _):
             return textHeight(title, size: groupSize, weight: .semibold, width: width) + rowVerticalPadding * 2 + 2
         case .line(let index, _):
@@ -72,22 +109,52 @@ enum InvoiceLayout {
         return 110 + notesHeight
     }
 
-    /// Group rows (project headings with subtotals) interleaved with line rows.
-    static func rows(for lines: [InvoiceLine]) -> [Row] {
+    /// Section rows (end-client headings) and group rows (project headings), each with the subtotal
+    /// of the run of lines beneath it, interleaved with line rows. Once any line has a section,
+    /// lines without one go under "Other" so they don't read as part of the section above.
+    static func rows<L: InvoiceLayoutLine>(for lines: [L]) -> [Row] {
+        let sectioned = lines.contains { !$0.sectionTitle.isEmpty }
+        let sections = lines.map { sectioned && $0.sectionTitle.isEmpty ? otherSection : $0.sectionTitle }
+
+        func subtotal(from start: Int, while belongs: (Int) -> Bool) -> (hours: Decimal, amount: Decimal) {
+            lines.indices[start...].prefix(while: belongs).reduce((Decimal(0), Decimal(0))) {
+                ($0.0 + lines[$1].subtotalHours, $0.1 + lines[$1].amount)
+            }
+        }
+
         var rows: [Row] = []
         var stripe = false
         for (index, line) in lines.enumerated() {
-            if !line.groupTitle.isEmpty, index == 0 || lines[index - 1].groupTitle != line.groupTitle {
-                let group = lines.filter { $0.groupTitle == line.groupTitle }
-                rows.append(.group(title: line.groupTitle,
-                                   hours: group.reduce(0) { $0 + ($1.quantity ?? 0) },
-                                   amount: group.reduce(0) { $0 + $1.amount }))
+            let newSection = sectioned && (index == 0 || sections[index - 1] != sections[index])
+            if newSection {
+                let sum = subtotal(from: index) { sections[$0] == sections[index] }
+                rows.append(.section(title: sections[index], hours: sum.hours, amount: sum.amount))
+                stripe = false
+            }
+            if !line.groupTitle.isEmpty, newSection || index == 0 || lines[index - 1].groupTitle != line.groupTitle {
+                let sum = subtotal(from: index) { sections[$0] == sections[index] && lines[$0].groupTitle == line.groupTitle }
+                rows.append(.group(title: line.groupTitle, hours: sum.hours, amount: sum.amount))
                 stripe = false
             }
             rows.append(.line(index: index, striped: stripe))
             stripe.toggle()
         }
         return rows
+    }
+
+    /// The heading rows just before each line, for lists that step through lines rather than rows.
+    static func headings<L: InvoiceLayoutLine>(for lines: [L]) -> [[Row]] {
+        var result = Array(repeating: [Row](), count: lines.count)
+        var pending: [Row] = []
+        for row in rows(for: lines) {
+            if case .line(let index, _) = row {
+                result[index] = pending
+                pending = []
+            } else {
+                pending.append(row)
+            }
+        }
+        return result
     }
 
     static func paginate(lines: [InvoiceLine], notes: String) -> [Page] {
@@ -105,9 +172,12 @@ enum InvoiceLayout {
 
         for (i, row) in rows.enumerated() {
             var needed = height(of: row, lines: lines)
-            // Don't strand a project heading at the bottom of a page.
-            if case .group = row, i + 1 < rows.count {
-                needed += height(of: rows[i + 1], lines: lines)
+            // Don't strand a heading at the bottom of a page: keep it with the first line beneath it.
+            if row.isHeading {
+                for next in rows[(i + 1)...] {
+                    needed += height(of: next, lines: lines)
+                    if !next.isHeading { break }
+                }
             }
             if needed > remaining, !current.isEmpty { newPage() }
             current.append(row)

@@ -16,14 +16,14 @@ final class TaskType {
     @Relationship(deleteRule: .nullify, inverse: \TimeEntry.task)
     var entries: [TimeEntry] = []
 
-    /// "Client / Project / Task" for pickers and labels.
+    /// "Client / End client / Project / Task" for pickers and labels (no end client, no segment).
     var path: String {
-        [project?.client?.name, project?.name, name].compactMap { $0 }.joined(separator: " / ")
+        [project?.client?.name, project?.endClient?.name, project?.name, name].compactMap { $0 }.joined(separator: " / ")
     }
 
-    /// "Project / Task", for lists already grouped by client.
+    /// "End client / Project / Task", for lists already grouped by client.
     var shortPath: String {
-        [project?.name, name].compactMap { $0 }.joined(separator: " / ")
+        [project?.endClient?.name, project?.name, name].compactMap { $0 }.joined(separator: " / ")
     }
 
     /// Can a timer be started on this task?

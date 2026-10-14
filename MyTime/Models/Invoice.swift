@@ -82,6 +82,8 @@ final class InvoiceLine {
     var invoice: Invoice?
     var kindRaw: String
     var lineDescription: String
+    /// End-client heading this line sits under, with a subtotal, or empty for none.
+    var sectionTitle: String = ""
     /// Heading this line sits under on the invoice (the project name), or empty for none.
     var groupTitle: String = ""
     /// Secondary text under the description, e.g. deduplicated entry notes.
@@ -98,10 +100,11 @@ final class InvoiceLine {
     }
 
     init(kind: InvoiceLineKind, description: String, quantity: Decimal?, unitPrice: Decimal, amount: Decimal, sortOrder: Int,
-         groupTitle: String = "", details: String = "") {
+         groupTitle: String = "", details: String = "", sectionTitle: String = "") {
         self.kindRaw = kind.rawValue
         self.lineDescription = description
         self.groupTitle = groupTitle
+        self.sectionTitle = sectionTitle
         self.details = details
         self.quantity = quantity
         self.unitPrice = unitPrice

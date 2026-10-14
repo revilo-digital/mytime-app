@@ -154,13 +154,14 @@ struct InvoiceDetailView: View {
             }
             VStack(alignment: .leading, spacing: 0) {
                 let lines = invoice.sortedLines
+                let headings = InvoiceLayout.headings(for: lines)
                 if lines.isEmpty {
                     Text("No lines yet").foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(20)
                 }
                 ForEach(Array(lines.enumerated()), id: \.element.persistentModelID) { index, line in
-                    if !line.groupTitle.isEmpty, index == 0 || lines[index - 1].groupTitle != line.groupTitle {
-                        GroupHeaderRow(title: line.groupTitle, lines: lines.filter { $0.groupTitle == line.groupTitle })
-                            .padding(.top, index == 0 ? 0 : 14)
+                    ForEach(Array(headings[index].enumerated()), id: \.offset) { position, heading in
+                        InvoiceHeadingView(row: heading)
+                            .padding(.top, position > 0 ? 2 : index == 0 ? 0 : 14)
                             .padding(.bottom, 4)
                     }
                     LineRow(line: line, editable: editable) {
@@ -320,19 +321,34 @@ extension InvoiceDetailView {
     }
 }
 
-private struct GroupHeaderRow: View {
-    let title: String
-    let lines: [InvoiceLine]
+/// An end-client or project heading with its subtotal, in the invoice and New Invoice lists.
+struct InvoiceHeadingView: View {
+    let row: InvoiceLayout.Row
 
     var body: some View {
+        switch row {
+        case .section(let title, let hours, let amount):
+            heading(title, hours: hours, amount: amount)
+                .font(.title3.weight(.semibold))
+                .padding(.bottom, 2)
+                .overlay(alignment: .bottom) { Divider() }
+        case .group(let title, let hours, let amount):
+            heading(title, hours: hours, amount: amount)
+                .font(.headline)
+                .padding(.top, 6)
+        case .line:
+            EmptyView()
+        }
+    }
+
+    private func heading(_ title: String, hours: Decimal, amount: Decimal) -> some View {
         HStack {
-            Text(title).font(.headline).foregroundStyle(.tint)
+            Text(title).foregroundStyle(row.isSection ? AnyShapeStyle(.primary) : AnyShapeStyle(.tint))
             Spacer()
-            Text(HoursFormat.clock(lines.reduce(0) { $0 + ($1.quantity ?? 0) })).foregroundStyle(.secondary)
-            Text(Money.format(lines.reduce(0) { $0 + $1.amount })).bold().frame(width: 100, alignment: .trailing)
+            if hours > 0 { Text(HoursFormat.clock(hours)).foregroundStyle(.secondary) }
+            Text(Money.format(amount)).frame(width: 100, alignment: .trailing)
         }
         .monospacedDigit()
-        .padding(.top, 6)
     }
 }
 

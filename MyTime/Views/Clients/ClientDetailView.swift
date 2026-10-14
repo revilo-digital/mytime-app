@@ -20,6 +20,11 @@ struct ClientDetailView: View {
             .sorted { ($0.isFavourite ? 0 : 1, $0.isArchived ? 1 : 0, $0.name) < ($1.isFavourite ? 0 : 1, $1.isArchived ? 1 : 0, $1.name) }
     }
 
+    /// Projects without an end client first, then each end client's, including end clients with none yet.
+    private var projectGroups: [EndClientGroup] {
+        EndClientGroup.group(projects, including: client.endClients.filter(\.projects.isEmpty))
+    }
+
     private var clientInvoices: [Invoice] {
         invoices.filter { $0.client?.persistentModelID == client.persistentModelID }
     }
@@ -101,7 +106,7 @@ struct ClientDetailView: View {
                         .buttonStyle(.bordered)
                 }
             }
-            if projects.isEmpty {
+            if projectGroups.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "folder.badge.plus").font(.title).foregroundStyle(.secondary)
                     Text("No projects yet").foregroundStyle(.secondary)
@@ -109,8 +114,16 @@ struct ClientDetailView: View {
                 .frame(maxWidth: .infinity)
                 .card(padding: 28)
             }
-            ForEach(projects) { project in
-                ProjectCard(project: project) { editingProject = project }
+            ForEach(projectGroups) { group in
+                if let endClient = group.endClient {
+                    EndClientHeader(endClient: endClient) {
+                        addProject(endClient: endClient)
+                    }
+                    .padding(.top, 10)
+                }
+                ForEach(group.projects) { project in
+                    ProjectCard(project: project) { editingProject = project }
+                }
             }
         }
     }
@@ -160,8 +173,75 @@ struct ClientDetailView: View {
     }
 
     private func addProject() {
+        addProject(endClient: nil)
+    }
+
+    private func addProject(endClient: EndClient?) {
         let project = TaskTemplates.makeProject(client: client, settings: BusinessSettings.current(in: context), context: context)
+        project.endClient = endClient
         editingProject = project
+    }
+}
+
+/// An end client's heading above its projects: totals across all its projects, archived ones included.
+private struct EndClientHeader: View {
+    @Environment(\.modelContext) private var context
+    @Bindable var endClient: EndClient
+    var onAddProject: () -> Void
+
+    @State private var renaming = false
+    @State private var newName = ""
+    @State private var confirmRemove = false
+
+    private var entries: [TimeEntry] { endClient.projects.flatMap(\.allEntries) }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(endClient.name).font(.title3.weight(.semibold))
+            Text(endClient.projects.isEmpty ? "No projects yet"
+                 : "\(endClient.projects.count) project\(endClient.projects.count == 1 ? "" : "s")")
+                .font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            let uninvoiced = BillingSummary.uninvoicedAmount(entries)
+            if uninvoiced > 0 {
+                Text("\(Money.format(uninvoiced)) uninvoiced").foregroundStyle(.green)
+            }
+            Text("\(HoursFormat.long(DurationFormat.hours(BillingSummary.totalSeconds(entries)))) tracked")
+                .foregroundStyle(.secondary)
+            Menu {
+                Button("New Project", systemImage: "plus", action: onAddProject)
+                Button("Rename…", systemImage: "pencil") {
+                    newName = endClient.name
+                    renaming = true
+                }
+                Divider()
+                Button("Remove End Client…", systemImage: "trash", role: .destructive) { confirmRemove = true }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+        .font(.callout)
+        .monospacedDigit()
+        .padding(.horizontal, 4)
+        .alert("Rename \(endClient.name)", isPresented: $renaming) {
+            TextField("Name", text: $newName)
+            Button("Rename") {
+                let name = newName.trimmingCharacters(in: .whitespaces)
+                if !name.isEmpty { endClient.name = name }
+                try? context.save()
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Remove \(endClient.name)?", isPresented: $confirmRemove) {
+            Button("Remove", role: .destructive) {
+                context.delete(endClient)
+                try? context.save()
+            }
+        } message: {
+            Text("Its projects and their time stay with \(endClient.client?.name ?? "the client"), just without an end client.")
+        }
     }
 }
 

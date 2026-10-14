@@ -1,7 +1,7 @@
 import SwiftData
 import SwiftUI
 
-/// All projects across clients, grouped by client, with budget burn for fixed-fee work.
+/// All projects across clients, grouped by client then end client, with budget burn for fixed-fee work.
 struct ProjectsView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \Project.name) private var projects: [Project]
@@ -30,7 +30,8 @@ struct ProjectsView: View {
             matches(project, filter)
                 && (clientFilter == nil || project.client?.persistentModelID == clientFilter)
                 && (search.isEmpty || project.name.localizedCaseInsensitiveContains(search)
-                    || (project.client?.name.localizedCaseInsensitiveContains(search) ?? false))
+                    || (project.client?.name.localizedCaseInsensitiveContains(search) ?? false)
+                    || (project.endClient?.name.localizedCaseInsensitiveContains(search) ?? false))
         }
     }
 
@@ -151,9 +152,15 @@ struct ProjectsView: View {
                 .padding(.vertical, 8)
                 .background(.quaternary.opacity(0.35))
 
-                ForEach(group.projects) { project in
-                    Divider().padding(.leading, 16)
-                    ProjectTableRow(project: project) { editing = project }
+                ForEach(EndClientGroup.group(group.projects)) { sub in
+                    if let endClient = sub.endClient {
+                        Divider().padding(.leading, 16)
+                        EndClientTableRow(name: endClient.name, projects: sub.projects)
+                    }
+                    ForEach(sub.projects) { project in
+                        Divider().padding(.leading, 16)
+                        ProjectTableRow(project: project, indented: sub.endClient != nil) { editing = project }
+                    }
                 }
             }
         }
@@ -174,9 +181,38 @@ private enum Col {
     static let actions: CGFloat = 80
 }
 
+/// Subheading for an end client's projects, with their combined tracked and uninvoiced totals.
+private struct EndClientTableRow: View {
+    let name: String
+    let projects: [Project]
+
+    var body: some View {
+        let entries = projects.flatMap(\.allEntries)
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Text(name).font(.callout.weight(.semibold))
+                Text("\(projects.count)").font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Color.clear.frame(width: Col.budget, height: 1)
+            Text(DurationFormat.short(BillingSummary.totalSeconds(entries)))
+                .frame(width: Col.hours, alignment: .trailing)
+            Text(Money.format(BillingSummary.uninvoicedAmount(entries)))
+                .frame(width: Col.uninvoiced, alignment: .trailing)
+            Color.clear.frame(width: Col.remaining, height: 1).padding(.leading, 8)
+            Color.clear.frame(width: Col.actions, height: 1)
+        }
+        .font(.callout.weight(.semibold))
+        .monospacedDigit()
+        .padding(.horizontal, 16)
+        .padding(.vertical, 7)
+    }
+}
+
 private struct ProjectTableRow: View {
     @Environment(\.modelContext) private var context
     @Bindable var project: Project
+    var indented = false
     var onEdit: () -> Void
 
     @State private var hovering = false
@@ -197,6 +233,7 @@ private struct ProjectTableRow: View {
                 if !project.isBillable { Tag(text: "Non-billable") }
                 if project.isArchived { Tag(text: "Archived", color: .orange) }
             }
+            .padding(.leading, indented ? 20 : 0)
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Text(budgetText).frame(width: Col.budget, alignment: .trailing)

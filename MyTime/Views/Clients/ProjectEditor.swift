@@ -6,6 +6,13 @@ struct ProjectEditor: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var project: Project
 
+    @State private var addingEndClient = false
+    @State private var newEndClientName = ""
+
+    private var endClients: [EndClient] {
+        (project.client?.endClients ?? []).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
     private var tasks: [TaskType] {
         project.tasks.sorted {
             if $0.isArchived != $1.isArchived { return !$0.isArchived }
@@ -18,6 +25,22 @@ struct ProjectEditor: View {
             Form {
                 Section("Project") {
                     TextField("Name", text: $project.name)
+                    LabeledContent("End client") {
+                        HStack {
+                            Picker("End client", selection: $project.endClient) {
+                                Text("None").tag(EndClient?.none)
+                                ForEach(endClients) { Text($0.name).tag(Optional($0)) }
+                            }
+                            .labelsHidden()
+                            .fixedSize()
+                            Button("New…") {
+                                newEndClientName = ""
+                                addingEndClient = true
+                            }
+                        }
+                    }
+                    .help("Who \(project.client?.name ?? "the client") is doing this for, e.g. an agency's client. "
+                          + "Groups projects and subtotals invoices.")
                     TextField("Code", text: $project.code, prompt: Text("Optional"))
                     Picker("Billing", selection: $project.billingType) {
                         Text("Hourly").tag(BillingType.hourly)
@@ -93,6 +116,27 @@ struct ProjectEditor: View {
             .padding()
         }
         .frame(width: 520, height: 600)
+        .alert("New end client", isPresented: $addingEndClient) {
+            TextField("Name, e.g. Globex", text: $newEndClientName)
+            Button("Add", action: addEndClient)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Who \(project.client?.name ?? "the client") is doing this work for.")
+        }
+    }
+
+    /// Assigns the named end client, reusing one with the same name.
+    private func addEndClient() {
+        let name = newEndClientName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, let client = project.client else { return }
+        if let existing = client.endClients.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+            project.endClient = existing
+        } else {
+            let endClient = EndClient(name: name, client: client)
+            context.insert(endClient)
+            project.endClient = endClient
+        }
+        try? context.save()
     }
 
     private var settings: BusinessSettings { BusinessSettings.current(in: context) }

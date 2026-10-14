@@ -1,7 +1,7 @@
 import SwiftData
 import SwiftUI
 
-/// Two dropdowns: project (labelled "Client › Project") then that project's tasks.
+/// Two dropdowns: project (labelled "Client › End client › Project") then that project's tasks.
 /// Only projects and tasks a timer can be started on are offered, plus the current selection.
 /// In a Form each dropdown gets its own labelled row; elsewhere they stack.
 struct TaskPicker: View {
@@ -34,7 +34,7 @@ struct TaskPicker: View {
     }
 
     static func title(_ project: Project) -> String {
-        [project.client?.name, project.name].compactMap { $0 }.joined(separator: " › ")
+        [project.client?.name, project.endClient?.name, project.name].compactMap { $0 }.joined(separator: " › ")
     }
 
     var body: some View {

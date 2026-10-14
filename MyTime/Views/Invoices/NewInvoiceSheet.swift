@@ -71,6 +71,7 @@ struct NewInvoiceSheet: View {
     @State private var customTo = Date.now
     @AppStorage("invoiceGrouping") private var grouping: LineGrouping = .projectTask
     @AppStorage("invoiceLineDetails") private var detailsRaw = LineDetails.standard.rawValue
+    @AppStorage("invoiceByEndClient") private var byEndClient = true
 
     @State private var actions: [PersistentIdentifier: EntryAction] = [:]
     @State private var showNonBillable = false
@@ -219,16 +220,46 @@ struct NewInvoiceSheet: View {
                         .frame(maxWidth: .infinity)
                         .padding(24)
                 }
-                ForEach(candidateProjects) { project in
-                    Divider()
-                    projectRow(project)
+                ForEach(EndClientGroup.group(candidateProjects)) { group in
+                    if let endClient = group.endClient {
+                        Divider()
+                        endClientRow(endClient, projects: group.projects)
+                    }
+                    ForEach(group.projects) { project in
+                        Divider()
+                        projectRow(project, indented: group.endClient != nil)
+                    }
                 }
             }
             .card(padding: 0, cornerRadius: 12)
         }
     }
 
-    private func projectRow(_ project: Project) -> some View {
+    /// Heading for an end client's projects; its checkbox selects them all.
+    private func endClientRow(_ endClient: EndClient, projects: [Project]) -> some View {
+        let ids = Set(projects.map(\.persistentModelID))
+        let entries = projects.flatMap(unbilledEntries(in:))
+        return HStack(spacing: 10) {
+            Toggle(isOn: Binding(
+                get: { ids.isSubset(of: selectedProjects) },
+                set: { if $0 { selectedProjects.formUnion(ids) } else { selectedProjects.subtract(ids) } }
+            )) {
+                Text(endClient.name).font(.headline)
+            }
+            .toggleStyle(.checkbox)
+            Spacer()
+            Text(Money.format(BillingSummary.uninvoicedAmount(entries)))
+                .font(.headline)
+                .monospacedDigit()
+                .frame(width: 150, alignment: .trailing)
+            Spacer().frame(width: 210).padding(.leading, 20)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.quaternary.opacity(0.35))
+    }
+
+    private func projectRow(_ project: Project, indented: Bool) -> some View {
         let id = project.persistentModelID
         let entries = unbilledEntries(in: project)
         let last = lastInvoice(for: project)
@@ -245,6 +276,7 @@ struct NewInvoiceSheet: View {
                 }
             }
             .toggleStyle(.checkbox)
+            .padding(.leading, indented ? 20 : 0)
             Spacer()
             VStack(alignment: .trailing, spacing: 1) {
                 if project.billingType == .hourly {
@@ -315,6 +347,16 @@ struct NewInvoiceSheet: View {
                             RadioRow(selected: grouping == option) { grouping = option } label: {
                                 Text("\(Text(option.rawValue).bold()): \(option.summary)")
                             }
+                        }
+                    }
+                }
+                if candidateProjects.contains(where: { $0.endClient != nil }) {
+                    GridRow {
+                        Text("End clients").font(.headline)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Toggle("Subtotal each end client", isOn: $byEndClient).toggleStyle(.checkbox)
+                            Text("Lines go under a heading for each of \(client?.name ?? "the client")'s clients, with its subtotal.")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -466,33 +508,30 @@ struct NewInvoiceSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Preview").font(.title3.weight(.semibold))
             VStack(alignment: .leading, spacing: 8) {
-                if previewLines.isEmpty && fixedLines.isEmpty {
+                let lines = previewLines
+                let headings = InvoiceLayout.headings(for: lines)
+                if lines.isEmpty {
                     Text("Nothing to invoice yet.").foregroundStyle(.secondary)
                 }
-                ForEach(Array(previewLines.enumerated()), id: \.offset) { index, line in
-                    if !line.groupTitle.isEmpty, index == 0 || previewLines[index - 1].groupTitle != line.groupTitle {
-                        Text(line.groupTitle).font(.headline).foregroundStyle(.tint).padding(.top, index == 0 ? 0 : 6)
+                ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                    ForEach(Array(headings[index].enumerated()), id: \.offset) { position, heading in
+                        InvoiceHeadingView(row: heading).padding(.top, position > 0 || index == 0 ? 0 : 8)
                     }
                     HStack(alignment: .firstTextBaseline) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(line.description)
+                            Text(line.description.isEmpty ? "Untitled line" : line.description)
                             if !line.details.isEmpty {
                                 Text(line.details).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                             }
                         }
                         Spacer()
-                        Text("\(HoursFormat.clock(line.hours)) × \(Money.format(line.rate))").foregroundStyle(.secondary)
+                        if line.kind == .hourly {
+                            Text("\(HoursFormat.clock(line.hours)) × \(Money.format(line.rate))").foregroundStyle(.secondary)
+                        }
                         Text(Money.format(line.amount)).bold().frame(width: 100, alignment: .trailing)
                     }
                     .monospacedDigit()
                     .padding(.leading, line.groupTitle.isEmpty ? 0 : 12)
-                }
-                ForEach(fixedLines) { line in
-                    HStack {
-                        Text(line.description.isEmpty ? "Untitled line" : line.description)
-                        Spacer()
-                        Text(Money.format(Money.round(line.amount))).bold().monospacedDigit().frame(width: 100, alignment: .trailing)
-                    }
                 }
             }
             .card(padding: 20)
@@ -559,14 +598,16 @@ struct NewInvoiceSheet: View {
     private var billEntries: [TimeEntry] { candidates.filter { action($0) == .bill } }
     private var coverEntries: [TimeEntry] { candidates.filter { action($0) == .cover } }
 
-    private var billedHours: Decimal { previewLines.reduce(0) { $0 + $1.hours } }
+    private var billedHours: Decimal { previewLines.reduce(0) { $0 + $1.subtotalHours } }
 
     private var selectedFixedFeeProjects: [Project] {
         candidateProjects.filter { $0.billingType == .fixedFee && selectedProjects.contains($0.persistentModelID) }
     }
 
     private func defaultFeeLine(_ project: Project) -> FixedLineInput {
-        FixedLineInput(description: "\(project.name) - agreed fee", amount: project.fixedFee ?? 0)
+        // Under an end-client heading the project name needs no prefix.
+        FixedLineInput(description: "\(byEndClient ? project.name : project.qualifiedName) - agreed fee",
+                       amount: project.fixedFee ?? 0, project: project)
     }
 
     private func feeBinding(_ project: Project) -> Binding<FixedLineInput> {
@@ -586,17 +627,17 @@ struct NewInvoiceSheet: View {
 
     private var settings: BusinessSettings { BusinessSettings.current(in: context) }
 
+    /// Every line the invoice will get, hourly and fixed, in order.
     private var previewLines: [LineSpec] {
-        InvoiceBuilder.hourlyLines(for: billEntries, grouping: grouping, roundingMinutes: settings.roundingMinutes,
-                                   include: LineDetails(rawValue: detailsRaw))
+        InvoiceBuilder.invoiceLines(bill: billEntries, fixed: fixedLines, grouping: grouping,
+                                    roundingMinutes: settings.roundingMinutes, include: LineDetails(rawValue: detailsRaw),
+                                    bySection: byEndClient)
     }
 
-    private var subtotal: Decimal {
-        previewLines.reduce(0) { $0 + $1.amount } + fixedLines.reduce(0) { $0 + Money.round($1.amount) }
-    }
+    private var subtotal: Decimal { previewLines.reduce(0) { $0 + $1.amount } }
 
     private var canCreate: Bool {
-        client != nil && (!previewLines.isEmpty || !coverEntries.isEmpty || fixedLines.contains { $0.amount != 0 })
+        client != nil && (!billEntries.isEmpty || !coverEntries.isEmpty || fixedLines.contains { $0.amount != 0 })
     }
 
     // MARK: Actions
@@ -640,6 +681,7 @@ struct NewInvoiceSheet: View {
             cover: coverEntries,
             grouping: grouping,
             include: LineDetails(rawValue: detailsRaw),
+            bySection: byEndClient,
             fixedLines: fixedLines,
             settings: settings,
             context: context
