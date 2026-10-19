@@ -56,12 +56,21 @@ struct TimerPopover: View {
         return entries.filter { $0.date == today }
     }
 
+    /// Today's paused timers, oldest first (matches `TimerService.pausedEntries`).
+    private var pausedEntries: [TimeEntry] {
+        todaysEntries.filter { $0.isPaused && !$0.isLocked }.reversed()
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             if let active = timer.activeEntry {
                 RunningTimerView(timer: timer, entry: active)
             } else {
                 startView
+            }
+
+            if !pausedEntries.isEmpty {
+                pausedSection
             }
 
             if !favouriteTasks.isEmpty {
@@ -126,6 +135,18 @@ struct TimerPopover: View {
         }
     }
 
+    private var pausedSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Paused", systemImage: "pause.circle.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 2)
+            ForEach(pausedEntries) { entry in
+                PausedTimerRow(entry: entry, timer: timer)
+            }
+        }
+    }
+
     private func quickStartSection(_ title: String, systemImage: String, tasks: [TaskType]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Label(title, systemImage: systemImage)
@@ -134,6 +155,7 @@ struct TimerPopover: View {
                 .padding(.bottom, 2)
             ForEach(tasks) { task in
                 let isActive = timer.activeEntry?.task?.persistentModelID == task.persistentModelID
+                let isPaused = pausedEntries.contains { $0.task?.persistentModelID == task.persistentModelID }
                 Button {
                     start(task, note: "")
                 } label: {
@@ -149,7 +171,7 @@ struct TimerPopover: View {
                 .buttonStyle(.plain)
                 .disabled(isActive)
                 .padding(.vertical, 3)
-                .help(timer.activeEntry == nil ? "Start timer" : "Switch to this task")
+                .help(isPaused ? "Resume the paused timer" : timer.activeEntry == nil ? "Start timer" : "Switch to this task")
             }
         }
     }
@@ -281,6 +303,13 @@ private struct RunningTimerView: View {
     private var actions: some View {
         HStack(spacing: 10) {
             Button {
+                timer.pause()
+            } label: {
+                Label("Pause", systemImage: "pause.fill").frame(maxWidth: .infinity)
+            }
+            .controlSize(.extraLarge)
+            .help("Pause — pick it up again from the Paused list")
+            Button {
                 timer.stop()
             } label: {
                 Label("Stop", systemImage: "stop.fill").frame(maxWidth: .infinity)
@@ -294,6 +323,42 @@ private struct RunningTimerView: View {
             .controlSize(.extraLarge)
             .help("Discard this timer")
         }
+    }
+}
+
+/// A paused timer: resume it (pausing whatever is running) or stop it for good.
+private struct PausedTimerRow: View {
+    let entry: TimeEntry
+    let timer: TimerService
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button { timer.resume(entry) } label: {
+                Image(systemName: "play.circle.fill").font(.title2)
+            }
+            .buttonStyle(.borderless)
+            .help(timer.activeEntry == nil ? "Resume" : "Switch to this timer (pauses the running one)")
+            VStack(alignment: .leading, spacing: 1) {
+                Text(entry.task?.path ?? "No task").lineLimit(1)
+                if !entry.note.isEmpty {
+                    Text(entry.note).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            Spacer()
+            Text(DurationFormat.short(entry.durationSeconds))
+                .font(.system(.title3, design: .rounded).weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+            Button { timer.stopPaused(entry) } label: {
+                Image(systemName: "stop.circle").font(.title3)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .help("Stop — keeps the time and removes it from Paused")
+        }
+        .font(.callout)
+        .padding(8)
+        .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: 10))
     }
 }
 

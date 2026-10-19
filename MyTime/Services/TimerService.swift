@@ -2,7 +2,8 @@ import Foundation
 import Observation
 import SwiftData
 
-/// Owns the single running timer. Only timestamps are persisted; elapsed time is derived.
+/// Owns the single running timer and any paused ones. Only timestamps are persisted; elapsed time is derived.
+/// Switching to another task pauses the running timer; only Stop takes a timer off the Paused list.
 @MainActor
 @Observable
 final class TimerService {
@@ -29,6 +30,7 @@ final class TimerService {
 
     /// Finds a timer left running by a previous launch (quit, crash or reboot).
     /// If somehow more than one is running, keeps the most recent and stops the rest.
+    /// Timers paused on an earlier day are stopped, so the Paused list starts each day empty.
     func recover(now: Date = .now) {
         let descriptor = FetchDescriptor<TimeEntry>(
             predicate: #Predicate { $0.startedAt != nil && $0.endedAt == nil },
@@ -39,13 +41,23 @@ final class TimerService {
         for stale in running.dropFirst() {
             finish(stale, at: now)
         }
+        let today = Calendar.current.startOfDay(for: now)
+        let oldPaused = FetchDescriptor<TimeEntry>(predicate: #Predicate { $0.isPaused && $0.date < today })
+        for entry in (try? context.fetch(oldPaused)) ?? [] {
+            entry.isPaused = false
+        }
         save()
     }
 
-    /// Starts a new entry, stopping whatever was running first.
+    /// Starts timing a task, pausing whatever was running first. With no note, a timer paused on
+    /// the same task today is picked up again rather than starting a second entry for it.
     @discardableResult
     func start(task: TaskType, note: String = "", now: Date = .now) -> TimeEntry {
-        stop(now: now)
+        if note.isEmpty, let paused = pausedEntry(for: task, now: now) {
+            resume(paused, now: now)
+            return paused
+        }
+        pause(now: now)
         let entry = TimeEntry(task: task, date: now, note: note)
         entry.startedAt = now
         context.insert(entry)
@@ -55,12 +67,13 @@ final class TimerService {
         return entry
     }
 
-    /// Continues an existing unlocked entry, adding time to it.
+    /// Continues an existing unlocked entry, adding time to it, and pauses whatever was running.
     func resume(_ entry: TimeEntry, now: Date = .now) {
         guard !entry.isLocked, !entry.isRunning else { return }
-        stop(now: now)
+        pause(now: now)
         entry.startedAt = now
         entry.endedAt = nil
+        entry.isPaused = false
         activeEntry = entry
         if let task = entry.task { remember(task) }
         save()
@@ -71,6 +84,35 @@ final class TimerService {
         finish(entry, at: now)
         activeEntry = nil
         save()
+    }
+
+    /// Banks the running timer's time and parks it on the Paused list.
+    func pause(now: Date = .now) {
+        guard let entry = activeEntry else { return }
+        finish(entry, at: now)
+        entry.isPaused = true
+        activeEntry = nil
+        save()
+    }
+
+    /// Takes a paused timer off the Paused list; its time is already recorded.
+    func stopPaused(_ entry: TimeEntry) {
+        entry.isPaused = false
+        save()
+    }
+
+    /// Today's paused timers that can still be picked up, oldest first.
+    func pausedEntries(now: Date = .now) -> [TimeEntry] {
+        let today = Calendar.current.startOfDay(for: now)
+        let descriptor = FetchDescriptor<TimeEntry>(
+            predicate: #Predicate { $0.isPaused && $0.date == today },
+            sortBy: [SortDescriptor(\.createdAt)]
+        )
+        return ((try? context.fetch(descriptor)) ?? []).filter { !$0.isLocked }
+    }
+
+    private func pausedEntry(for task: TaskType, now: Date) -> TimeEntry? {
+        pausedEntries(now: now).first { $0.task?.persistentModelID == task.persistentModelID }
     }
 
     /// Everything tracked today, including the running entry.
@@ -126,6 +168,7 @@ final class TimerService {
     private func finish(_ entry: TimeEntry, at now: Date) {
         entry.durationSeconds = entry.liveDuration(at: now)
         entry.endedAt = now
+        entry.isPaused = false
     }
 
     private func save() {

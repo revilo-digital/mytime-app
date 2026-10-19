@@ -58,12 +58,15 @@ struct TimerServiceTests {
         #expect(timer.activeEntry == nil)
     }
 
-    @Test func startingAnotherTimerStopsTheFirst() throws {
+    @Test func startingAnotherTaskPausesTheFirst() throws {
         let timer = TimerService(context: context, defaults: .tests)
+        let other = TaskType(name: "Meetings", project: task.project!)
+        context.insert(other)
         let first = timer.start(task: task, now: t0)
-        let second = timer.start(task: task, now: t0.addingTimeInterval(600))
+        let second = timer.start(task: other, now: t0.addingTimeInterval(600))
         #expect(first.durationSeconds == 600)
         #expect(!first.isRunning)
+        #expect(first.isPaused)
         #expect(second.isRunning)
         #expect(try allEntries().filter(\.isRunning).count == 1)
     }
@@ -126,6 +129,80 @@ extension TimerServiceTests {
         timer.toggleLast(now: t0.addingTimeInterval(120))
         #expect(timer.activeEntry?.task?.persistentModelID == task.persistentModelID)
         #expect(try allEntries().count == 2)
+    }
+}
+
+extension TimerServiceTests {
+    @Test func pauseBanksTimeAndListsTheTimer() throws {
+        let timer = TimerService(context: context, defaults: .tests)
+        let entry = timer.start(task: task, now: t0)
+        timer.pause(now: t0.addingTimeInterval(900))
+        #expect(timer.activeEntry == nil)
+        #expect(!entry.isRunning)
+        #expect(entry.durationSeconds == 900)
+        #expect(timer.pausedEntries(now: t0).map(\.persistentModelID) == [entry.persistentModelID])
+    }
+
+    @Test func startingAPausedTaskPicksUpTheSameEntry() throws {
+        let timer = TimerService(context: context, defaults: .tests)
+        let entry = timer.start(task: task, now: t0)
+        timer.pause(now: t0.addingTimeInterval(600))
+        let again = timer.start(task: task, now: t0.addingTimeInterval(1200))
+        #expect(again.persistentModelID == entry.persistentModelID)
+        timer.stop(now: t0.addingTimeInterval(1500))
+        #expect(entry.durationSeconds == 900)
+        #expect(!entry.isPaused)
+        #expect(try allEntries().count == 1)
+    }
+
+    @Test func startingWithANoteMakesANewEntryEvenIfPaused() throws {
+        let timer = TimerService(context: context, defaults: .tests)
+        timer.start(task: task, now: t0)
+        timer.pause(now: t0.addingTimeInterval(600))
+        timer.start(task: task, note: "Something else", now: t0.addingTimeInterval(700))
+        #expect(try allEntries().count == 2)
+    }
+
+    @Test func switchingBetweenPausedTimersKeepsBothOpen() throws {
+        let timer = TimerService(context: context, defaults: .tests)
+        let other = TaskType(name: "Meetings", project: task.project!)
+        context.insert(other)
+        let a = timer.start(task: task, now: t0)
+        let b = timer.start(task: other, now: t0.addingTimeInterval(600))
+        timer.resume(a, now: t0.addingTimeInterval(900))
+        #expect(a.isRunning && !a.isPaused)
+        #expect(b.isPaused && b.durationSeconds == 300)
+        timer.resume(b, now: t0.addingTimeInterval(1200))
+        #expect(a.isPaused && a.durationSeconds == 900)
+        #expect(timer.pausedEntries(now: t0).count == 1)
+        #expect(try allEntries().count == 2)
+    }
+
+    @Test func stoppingAPausedTimerKeepsItsTime() throws {
+        let timer = TimerService(context: context, defaults: .tests)
+        let entry = timer.start(task: task, now: t0)
+        timer.pause(now: t0.addingTimeInterval(600))
+        timer.stopPaused(entry)
+        #expect(!entry.isPaused)
+        #expect(entry.durationSeconds == 600)
+        #expect(timer.pausedEntries(now: t0).isEmpty)
+    }
+
+    @Test func lockedPausedTimersDropOffTheList() throws {
+        let timer = TimerService(context: context, defaults: .tests)
+        let entry = timer.start(task: task, now: t0)
+        timer.pause(now: t0.addingTimeInterval(600))
+        entry.billingState = .billed
+        #expect(timer.pausedEntries(now: t0).isEmpty)
+    }
+
+    @Test func recoveryStopsTimersPausedOnEarlierDays() throws {
+        let timer = TimerService(context: context, defaults: .tests)
+        let entry = timer.start(task: task, now: t0)
+        timer.pause(now: t0.addingTimeInterval(600))
+        timer.recover(now: t0.addingTimeInterval(86_400))
+        #expect(!entry.isPaused)
+        #expect(entry.durationSeconds == 600)
     }
 }
 

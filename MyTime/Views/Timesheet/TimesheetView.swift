@@ -349,17 +349,24 @@ private struct EntryRow: View {
                 if entry.isRunning, let started = entry.startedAt {
                     Text("since \(started.formatted(date: .omitted, time: .shortened))")
                         .font(.caption).foregroundStyle(.secondary)
+                } else if entry.isPaused {
+                    Label("Paused", systemImage: "pause.fill")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
 
             HStack(spacing: 8) {
                 if entry.isRunning {
+                    Button { timer.pause() } label: { Label("Pause", systemImage: "pause.fill") }
+                        .buttonStyle(.bordered)
                     Button { timer.stop() } label: { Label("Stop", systemImage: "stop.fill") }
                         .buttonStyle(.borderedProminent)
                         .tint(.red)
                 } else if !entry.isLocked {
-                    Button { timer.resume(entry) } label: { Label("Start", systemImage: "play.fill") }
-                        .buttonStyle(.bordered)
+                    Button { timer.resume(entry) } label: {
+                        Label(entry.isPaused ? "Resume" : "Start", systemImage: "play.fill")
+                    }
+                    .buttonStyle(.bordered)
                 }
                 Menu {
                     menuItems

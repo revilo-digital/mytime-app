@@ -16,6 +16,8 @@ enum BillingState: String, Codable, CaseIterable {
 ///
 /// `durationSeconds` holds completed time. While the timer runs, `startedAt` is set and
 /// `endedAt` is nil; elapsed time is always derived from timestamps, never persisted per tick.
+/// A paused entry has its time banked like a stopped one, but stays on the popover's Paused list
+/// so it can be picked up again instead of starting a second entry for the same task.
 @Model
 final class TimeEntry {
     var task: TaskType?
@@ -30,6 +32,7 @@ final class TimeEntry {
     var invoice: Invoice?
     var writeOffReason: String?
     var createdAt: Date
+    var isPaused: Bool = false
 
     var billingState: BillingState {
         get { BillingState(rawValue: billingStateRaw) ?? .unbilled }

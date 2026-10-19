@@ -14,6 +14,8 @@ never leaves your machine unless you back it up to iCloud Drive yourself.
 
 - **Menu bar timer**
   - Pick a project, then a task, and start the timer. The popover remembers your last choice.
+  - Pause as well as stop. Paused timers wait in a list so you can switch between tasks; switching pauses the
+    running timer, and starting a paused task carries on the same entry instead of adding another.
   - Edit, add or delete today's entries without opening the main window.
   - Global shortcuts: <kbd>⌥⌘T</kbd> opens the timer and <kbd>⌥⌘S</kbd> starts or stops the last task.
   - A running timer survives quitting, sleep, crashes and reboots. Only the start timestamp is stored, and
