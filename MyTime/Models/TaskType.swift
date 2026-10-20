@@ -11,6 +11,8 @@ final class TaskType {
     var rateOverride: Decimal?
     var isBillable: Bool
     var isArchived: Bool
+    /// Starred for one-click starts in the popover.
+    var isFavourite: Bool = false
     var createdAt: Date
 
     @Relationship(deleteRule: .nullify, inverse: \TimeEntry.task)

@@ -23,33 +23,10 @@ struct TimerPopover: View {
             .sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
     }
 
-    /// Up to five most recently used tasks.
-    private var recentTasks: [TaskType] {
-        var seen = Set<PersistentIdentifier>()
-        var result: [TaskType] = []
-        for entry in entries {
-            guard let task = entry.task, task.isSelectable, seen.insert(task.persistentModelID).inserted else { continue }
-            result.append(task)
-            if result.count == 5 { break }
-        }
-        return result
-    }
+    private var favouriteTasks: [TaskType] { QuickStart.favourites(tasks: tasks, entries: entries) }
 
-    /// One task per favourite project: the one last used there, else its first task.
-    private var favouriteTasks: [TaskType] {
-        let projects = Set(tasks.compactMap(\.project).filter(\.isFavourite).map(\.persistentModelID))
-        var chosen: [PersistentIdentifier: TaskType] = [:]
-        for entry in entries {
-            guard let task = entry.task, task.isSelectable, let project = task.project,
-                  projects.contains(project.persistentModelID), chosen[project.persistentModelID] == nil else { continue }
-            chosen[project.persistentModelID] = task
-        }
-        for task in tasks {
-            guard let project = task.project, projects.contains(project.persistentModelID) else { continue }
-            if chosen[project.persistentModelID] == nil { chosen[project.persistentModelID] = task }
-        }
-        return chosen.values.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
-    }
+    /// The last three tasks tracked that aren't already favourites.
+    private var recentTasks: [TaskType] { QuickStart.recents(entries: entries, excluding: favouriteTasks) }
 
     private var todaysEntries: [TimeEntry] {
         let today = Calendar.current.startOfDay(for: .now)
@@ -156,22 +133,25 @@ struct TimerPopover: View {
             ForEach(tasks) { task in
                 let isActive = timer.activeEntry?.task?.persistentModelID == task.persistentModelID
                 let isPaused = pausedEntries.contains { $0.task?.persistentModelID == task.persistentModelID }
-                Button {
-                    start(task, note: "")
-                } label: {
-                    HStack {
-                        Image(systemName: isActive ? "record.circle" : "play.fill")
-                            .foregroundStyle(isActive ? .red : .accentColor)
-                            .frame(width: 16)
-                        Text(task.path).lineLimit(1)
-                        Spacer()
+                HStack {
+                    Button {
+                        start(task, note: "")
+                    } label: {
+                        HStack {
+                            Image(systemName: isActive ? "record.circle" : "play.fill")
+                                .foregroundStyle(isActive ? .red : .accentColor)
+                                .frame(width: 16)
+                            Text(task.path).lineLimit(1)
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
                     }
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .disabled(isActive)
+                    .help(isPaused ? "Resume the paused timer" : timer.activeEntry == nil ? "Start timer" : "Switch to this task")
+                    FavouriteStar(task: task)
                 }
-                .buttonStyle(.plain)
-                .disabled(isActive)
                 .padding(.vertical, 3)
-                .help(isPaused ? "Resume the paused timer" : timer.activeEntry == nil ? "Start timer" : "Switch to this task")
             }
         }
     }
@@ -323,6 +303,29 @@ private struct RunningTimerView: View {
             .controlSize(.extraLarge)
             .help("Discard this timer")
         }
+    }
+}
+
+/// Stars or unstars a task. A task that's only a favourite through its starred project
+/// shows filled too, and unstarring it unstars the project.
+private struct FavouriteStar: View {
+    @Environment(\.modelContext) private var context
+    let task: TaskType
+
+    private var viaProject: Bool { !task.isFavourite && task.project?.isFavourite == true }
+    private var isOn: Bool { task.isFavourite || viaProject }
+
+    var body: some View {
+        Button {
+            if viaProject { task.project?.isFavourite = false } else { task.isFavourite.toggle() }
+            try? context.save()
+        } label: {
+            Image(systemName: isOn ? "star.fill" : "star")
+                .foregroundStyle(isOn ? AnyShapeStyle(.yellow) : AnyShapeStyle(.tertiary))
+        }
+        .buttonStyle(.borderless)
+        .help(viaProject ? "Remove \(task.project?.name ?? "the project") from favourites"
+              : isOn ? "Remove from favourites" : "Add to favourites")
     }
 }
 

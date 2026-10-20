@@ -279,7 +279,7 @@ private struct ProjectCard: View {
                     if project.isArchived { Tag(text: "Archived", color: .orange) }
                 }
                 if !activeTasks.isEmpty {
-                    FlowTags(items: activeTasks.map(\.name))
+                    TaskChips(tasks: activeTasks)
                 }
             }
 
@@ -326,20 +326,42 @@ private struct ProjectCard: View {
     }
 }
 
-/// Wrapping row of small grey chips.
-private struct FlowTags: View {
-    let items: [String]
+/// Wrapping row of small grey task chips; click one to star it for one-click starts in the menu bar.
+private struct TaskChips: View {
+    let tasks: [TaskType]
 
     var body: some View {
         FlowLayout(spacing: 6) {
-            ForEach(items, id: \.self) { item in
-                Text(item)
-                    .font(.caption)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(.quaternary, in: .capsule)
-            }
+            ForEach(tasks) { TaskChip(task: $0) }
         }
+    }
+}
+
+private struct TaskChip: View {
+    @Environment(\.modelContext) private var context
+    @Bindable var task: TaskType
+    @State private var hovering = false
+
+    var body: some View {
+        Button {
+            task.isFavourite.toggle()
+            try? context.save()
+        } label: {
+            HStack(spacing: 4) {
+                if task.isFavourite || hovering {
+                    Image(systemName: task.isFavourite ? "star.fill" : "star")
+                        .foregroundStyle(task.isFavourite ? AnyShapeStyle(.yellow) : AnyShapeStyle(.secondary))
+                }
+                Text(task.name)
+            }
+            .font(.caption)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(.quaternary, in: .capsule)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(task.isFavourite ? "Remove from favourites" : "Add to favourites")
     }
 }
 

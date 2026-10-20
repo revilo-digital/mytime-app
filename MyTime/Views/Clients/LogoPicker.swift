@@ -23,11 +23,11 @@ struct LogoPicker: View {
             Avatar(name: client.name, size: size, imageData: client.logoData)
                 .overlay {
                     if hovering || targeted {
-                        Circle().fill(.black.opacity(0.45))
+                        Avatar.shape(size: size).fill(.black.opacity(0.45))
                         Image(systemName: targeted ? "arrow.down.circle" : "camera").foregroundStyle(.white).font(.title3)
                     }
                 }
-                .overlay(Circle().strokeBorder(Color.accentColor, lineWidth: targeted ? 3 : 0))
+                .overlay(Avatar.shape(size: size).strokeBorder(Color.accentColor, lineWidth: targeted ? 3 : 0))
         }
         .menuStyle(.button)
         .buttonStyle(.plain)

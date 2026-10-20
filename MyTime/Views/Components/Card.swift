@@ -44,7 +44,7 @@ struct Tag: View {
     }
 }
 
-/// Client logo in a circle, or initials on a colour that's stable per name.
+/// Client logo in a rounded square, or initials on a colour that's stable per name.
 struct Avatar: View {
     let name: String
     var size: CGFloat = 32
@@ -62,22 +62,27 @@ struct Avatar: View {
         return Self.palette[hash % Self.palette.count]
     }
 
+    /// App-icon style tile, so square logos fill it edge to edge.
+    static func shape(size: CGFloat) -> RoundedRectangle {
+        RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+    }
+
     var body: some View {
         if let imageData, let image = NSImage(data: imageData) {
             Image(nsImage: image)
                 .resizable()
                 .interpolation(.high)
                 .scaledToFit()
-                .padding(size * 0.14)
                 .frame(width: size, height: size)
-                .background(.white, in: .circle)
-                .overlay(Circle().strokeBorder(.separator.opacity(0.6), lineWidth: 1))
+                .background(.white)
+                .clipShape(Self.shape(size: size))
+                .overlay(Self.shape(size: size).strokeBorder(.separator.opacity(0.6), lineWidth: 1))
         } else {
             Text(initials.isEmpty ? "?" : initials)
                 .font(.system(size: size * 0.4, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white)
                 .frame(width: size, height: size)
-                .background(color.gradient, in: .circle)
+                .background(color.gradient, in: Self.shape(size: size))
         }
     }
 }
