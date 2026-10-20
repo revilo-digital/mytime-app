@@ -141,6 +141,7 @@ struct TimerPopover: View {
                             Image(systemName: isActive ? "record.circle" : "play.fill")
                                 .foregroundStyle(isActive ? .red : .accentColor)
                                 .frame(width: 16)
+                            ClientTile(client: task.project?.client, size: 18)
                             Text(task.path).lineLimit(1)
                             Spacer()
                         }
@@ -246,9 +247,12 @@ private struct RunningTimerView: View {
                         .monospacedDigit()
                         .contentTransition(.numericText())
                 }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.task?.project?.client?.name ?? "").font(.caption).foregroundStyle(.secondary)
-                    Text(entry.task?.shortPath ?? "No task").font(.headline)
+                HStack(spacing: 10) {
+                    ClientTile(client: entry.task?.project?.client, size: 36)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.task?.project?.client?.name ?? "").font(.caption).foregroundStyle(.secondary)
+                        Text(entry.task?.shortPath ?? "No task").font(.headline)
+                    }
                 }
             }
             .padding(16)
@@ -341,6 +345,7 @@ private struct PausedTimerRow: View {
             }
             .buttonStyle(.borderless)
             .help(timer.activeEntry == nil ? "Resume" : "Switch to this timer (pauses the running one)")
+            ClientTile(client: entry.task?.project?.client, size: 22)
             VStack(alignment: .leading, spacing: 1) {
                 Text(entry.task?.path ?? "No task").lineLimit(1)
                 if !entry.note.isEmpty {
@@ -362,6 +367,18 @@ private struct PausedTimerRow: View {
         .font(.callout)
         .padding(8)
         .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: 10))
+    }
+}
+
+/// The client's avatar tile, sized for popover rows; nothing for an entry with no task.
+private struct ClientTile: View {
+    let client: Client?
+    let size: CGFloat
+
+    var body: some View {
+        if let client {
+            Avatar(name: client.name, size: size, imageData: client.logoData)
+        }
     }
 }
 
@@ -418,6 +435,7 @@ private struct PopoverEntryRow: View {
 
     private var summary: some View {
         HStack {
+            ClientTile(client: entry.task?.project?.client, size: 20)
             VStack(alignment: .leading) {
                 Text(entry.task?.path ?? "No task").lineLimit(1)
                 if !entry.note.isEmpty, !isEditing {

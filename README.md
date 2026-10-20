@@ -29,7 +29,7 @@ never leaves your machine unless you back it up to iCloud Drive yourself.
     Nothing is rounded to 0.68 h first.
 - **Clients, projects and tasks**
   - Rates cascade from task to project to client.
-  - Fixed-fee projects, client logos, and archiving.
+  - Fixed-fee projects, client logos (shown in the timer too), and archiving.
   - End clients, for agency work: tag a project with the client's own client (say, Globex through the agency
     Acme). Projects group under each end client with its tracked and uninvoiced totals, and the timer shows
     "Acme › Globex › Project".
