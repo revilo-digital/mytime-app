@@ -25,6 +25,10 @@ final class Project {
     @Relationship(deleteRule: .cascade, inverse: \TaskType.project)
     var tasks: [TaskType] = []
 
+    /// Agreed-fee lines invoiced for this project, which may have no time behind them.
+    @Relationship(deleteRule: .nullify, inverse: \InvoiceLine.project)
+    var invoiceLines: [InvoiceLine] = []
+
     /// "Globex – Spring Campaign": the name with its end client, for places that don't show the end client separately.
     var qualifiedName: String {
         endClient.map { "\($0.name) – \(name)" } ?? name

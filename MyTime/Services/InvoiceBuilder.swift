@@ -70,6 +70,7 @@ struct LineSpec: Equatable {
     var details: String = ""
     var sectionTitle: String = ""
     var kind: InvoiceLineKind = .hourly
+    var project: Project?
 }
 
 @MainActor
@@ -202,7 +203,8 @@ enum InvoiceBuilder {
                                  include: include, sections: sectioned)
         let fees = fixed.map { line in
             LineSpec(description: line.description, hours: 0, rate: line.amount, amount: Money.round(line.amount),
-                     sectionTitle: sectioned ? line.project.map { Self.section(of: $0).title } ?? "" : "", kind: .fixed)
+                     sectionTitle: sectioned ? line.project.map { Self.section(of: $0).title } ?? "" : "", kind: .fixed,
+                     project: line.project)
         }
         guard sectioned else { return hourly + fees }
 
@@ -219,6 +221,32 @@ enum InvoiceBuilder {
             return a.offset < b.offset
         }
         .map(\.element)
+    }
+
+    // MARK: Choosing projects
+
+    /// Projects that can go on a client's invoice, hourly first: any with unbilled time, plus active
+    /// fixed-fee ones, whose agreed fee can be invoiced before any time is tracked.
+    static func invoiceableProjects(client: Client, unbilled: [TimeEntry]) -> [Project] {
+        let tracked = unbilled.compactMap(\.task?.project)
+            .filter { $0.client?.persistentModelID == client.persistentModelID }
+        let fixedFee = client.projects.filter { $0.billingType == .fixedFee && !$0.isArchived && $0.isBillable }
+        var seen = Set<PersistentIdentifier>()
+        return (tracked + fixedFee)
+            .filter { seen.insert($0.persistentModelID).inserted }
+            .sorted {
+                ($0.isArchived ? 1 : 0, $0.billingType == .hourly ? 0 : 1, $0.name)
+                    < ($1.isArchived ? 1 : 0, $1.billingType == .hourly ? 0 : 1, $1.name)
+            }
+    }
+
+    /// The first of `invoices` with this project's time or agreed fee on it.
+    static func lastInvoice(for project: Project, in invoices: [Invoice]) -> Invoice? {
+        let id = project.persistentModelID
+        return invoices.first { invoice in
+            invoice.entries.contains { $0.task?.project?.persistentModelID == id }
+                || invoice.lines.contains { $0.project?.persistentModelID == id }
+        }
     }
 
     // MARK: Create / recalculate / delete
@@ -252,6 +280,7 @@ enum InvoiceBuilder {
                                    unitPrice: spec.rate, amount: spec.amount, sortOrder: order,
                                    groupTitle: spec.groupTitle, details: spec.details, sectionTitle: spec.sectionTitle)
             line.invoice = invoice
+            line.project = spec.project
             context.insert(line)
         }
 

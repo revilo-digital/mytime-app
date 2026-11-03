@@ -132,7 +132,7 @@ struct TimerPopover: View {
                 .padding(.bottom, 2)
             ForEach(tasks) { task in
                 let isActive = timer.activeEntry?.task?.persistentModelID == task.persistentModelID
-                let isPaused = pausedEntries.contains { $0.task?.persistentModelID == task.persistentModelID }
+                let hasEntryToday = todaysEntries.contains { !$0.isLocked && $0.task?.persistentModelID == task.persistentModelID }
                 HStack {
                     Button {
                         start(task, note: "")
@@ -149,7 +149,7 @@ struct TimerPopover: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(isActive)
-                    .help(isPaused ? "Resume the paused timer" : timer.activeEntry == nil ? "Start timer" : "Switch to this task")
+                    .help(hasEntryToday ? "Continue today's timer" : timer.activeEntry == nil ? "Start timer" : "Switch to this task")
                     FavouriteStar(task: task)
                 }
                 .padding(.vertical, 3)

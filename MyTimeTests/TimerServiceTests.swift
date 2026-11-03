@@ -128,7 +128,7 @@ extension TimerServiceTests {
         #expect(timer.activeEntry == nil)
         timer.toggleLast(now: t0.addingTimeInterval(120))
         #expect(timer.activeEntry?.task?.persistentModelID == task.persistentModelID)
-        #expect(try allEntries().count == 2)
+        #expect(try allEntries().count == 1)
     }
 }
 
@@ -153,6 +153,40 @@ extension TimerServiceTests {
         #expect(entry.durationSeconds == 900)
         #expect(!entry.isPaused)
         #expect(try allEntries().count == 1)
+    }
+
+    @Test func startingAStoppedTaskAddsToTheSameEntry() throws {
+        let timer = TimerService(context: context, defaults: .tests)
+        let entry = timer.start(task: task, now: t0)
+        timer.stop(now: t0.addingTimeInterval(600))
+        let again = timer.start(task: task, now: t0.addingTimeInterval(1200))
+        #expect(again.persistentModelID == entry.persistentModelID)
+        #expect(again.isRunning)
+        timer.stop(now: t0.addingTimeInterval(1500))
+        #expect(entry.durationSeconds == 900)
+        #expect(try allEntries().count == 1)
+    }
+
+    @Test func startingAfterALockedEntryOrOnANewDayMakesANewEntry() throws {
+        let timer = TimerService(context: context, defaults: .tests)
+        let locked = timer.start(task: task, now: t0)
+        timer.stop(now: t0.addingTimeInterval(600))
+        locked.billingState = .billed
+        let unlocked = timer.start(task: task, now: t0.addingTimeInterval(1200))
+        #expect(unlocked.persistentModelID != locked.persistentModelID)
+        timer.stop(now: t0.addingTimeInterval(1800))
+        let tomorrow = timer.start(task: task, now: t0.addingTimeInterval(86_400))
+        #expect(tomorrow.persistentModelID != unlocked.persistentModelID)
+        #expect(tomorrow.durationSeconds == 0)
+    }
+
+    @Test func startingPrefersThePausedEntryOverALaterStoppedOne() throws {
+        let timer = TimerService(context: context, defaults: .tests)
+        let paused = timer.start(task: task, now: t0)
+        timer.pause(now: t0.addingTimeInterval(600))
+        timer.start(task: task, note: "Something else", now: t0.addingTimeInterval(700))
+        timer.stop(now: t0.addingTimeInterval(800))
+        #expect(timer.start(task: task, now: t0.addingTimeInterval(900)).persistentModelID == paused.persistentModelID)
     }
 
     @Test func startingWithANoteMakesANewEntryEvenIfPaused() throws {

@@ -80,6 +80,8 @@ enum InvoiceLineKind: String, Codable {
 @Model
 final class InvoiceLine {
     var invoice: Invoice?
+    /// The project an agreed-fee line is for; nil for hourly and hand-added lines.
+    var project: Project?
     var kindRaw: String
     var lineDescription: String
     /// End-client heading this line sits under, with a subtotal, or empty for none.

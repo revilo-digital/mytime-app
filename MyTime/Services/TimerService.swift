@@ -49,13 +49,13 @@ final class TimerService {
         save()
     }
 
-    /// Starts timing a task, pausing whatever was running first. With no note, a timer paused on
-    /// the same task today is picked up again rather than starting a second entry for it.
+    /// Starts timing a task, pausing whatever was running first. With no note, today's entry for the
+    /// same task is picked up again, paused or stopped, rather than starting a second one at zero.
     @discardableResult
     func start(task: TaskType, note: String = "", now: Date = .now) -> TimeEntry {
-        if note.isEmpty, let paused = pausedEntry(for: task, now: now) {
-            resume(paused, now: now)
-            return paused
+        if note.isEmpty, let existing = entryToContinue(for: task, now: now) {
+            resume(existing, now: now)
+            return existing
         }
         pause(now: now)
         let entry = TimeEntry(task: task, date: now, note: note)
@@ -111,8 +111,17 @@ final class TimerService {
         return ((try? context.fetch(descriptor)) ?? []).filter { !$0.isLocked }
     }
 
-    private func pausedEntry(for task: TaskType, now: Date) -> TimeEntry? {
-        pausedEntries(now: now).first { $0.task?.persistentModelID == task.persistentModelID }
+    /// Today's unlocked entry for a task: a paused one if there is one, else the most recent.
+    private func entryToContinue(for task: TaskType, now: Date) -> TimeEntry? {
+        let today = Calendar.current.startOfDay(for: now)
+        let descriptor = FetchDescriptor<TimeEntry>(
+            predicate: #Predicate { $0.date == today },
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
+        let matching = ((try? context.fetch(descriptor)) ?? []).filter {
+            !$0.isLocked && $0.task?.persistentModelID == task.persistentModelID
+        }
+        return matching.first(where: \.isPaused) ?? matching.first
     }
 
     /// Everything tracked today, including the running entry.

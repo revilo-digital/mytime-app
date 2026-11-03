@@ -15,7 +15,8 @@ never leaves your machine unless you back it up to iCloud Drive yourself.
 - **Menu bar timer**
   - Pick a project, then a task, and start the timer. The popover remembers your last choice.
   - Pause as well as stop. Paused timers wait in a list so you can switch between tasks; switching pauses the
-    running timer, and starting a paused task carries on the same entry instead of adding another.
+    running timer. Starting a task you've already tracked today, paused or stopped, carries on that entry
+    instead of adding another at zero.
   - Star tasks (in the popover or on a client's project cards) for one-click starts. The last three other tasks
     you tracked show underneath.
   - Edit, add or delete today's entries without opening the main window.
@@ -41,6 +42,7 @@ never leaves your machine unless you back it up to iCloud Drive yourself.
     each of its clients.
   - Hours can be *billed*, *covered* by a fixed-fee line, or *written off*, so fixed-price work never leaves
     hours stuck as "uninvoiced".
+  - A fixed-fee project's agreed fee can be invoiced before any time is tracked against it.
   - Invoices are snapshotted, so changing a rate later never alters one you've already sent.
   - Generates an A4 tax invoice PDF (multi-page, with GST) and opens it as a draft in Apple Mail from the address
     you choose.

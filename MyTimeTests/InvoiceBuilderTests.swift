@@ -135,6 +135,32 @@ struct InvoiceBuilderTests {
         #expect(unbilledTotal() == 0)
     }
 
+    @Test func fixedFeeProjectsCanBeInvoicedWithNoTime() {
+        let rebuild = fixedTask.project!
+        #expect(InvoiceBuilder.invoiceableProjects(client: client, unbilled: []).map(\.name) == ["Rebuild"])
+
+        // Hourly projects still need time, and archived or non-billable fixed-fee ones stay off.
+        let archived = Project(name: "Old", client: client, billingType: .fixedFee)
+        archived.isArchived = true
+        let unpaid = Project(name: "Pro bono", client: client, billingType: .fixedFee)
+        unpaid.isBillable = false
+        context.insert(archived)
+        context.insert(unpaid)
+        let projects = InvoiceBuilder.invoiceableProjects(client: client, unbilled: [entry(dev, minutes: 60)])
+        #expect(projects.map(\.name) == ["Support", "Rebuild"])
+
+        #expect(InvoiceBuilder.lastInvoice(for: rebuild, in: []) == nil)
+        let invoice = InvoiceBuilder.createInvoice(
+            client: client, bill: [], cover: [], grouping: .task,
+            fixedLines: [FixedLineInput(description: "Rebuild - agreed fee", amount: 750, project: rebuild)],
+            settings: settings, context: context)
+        #expect(invoice.subtotal == 750)
+        #expect(invoice.entries.isEmpty)
+        // The fee alone counts as invoicing the project, so it isn't suggested again.
+        #expect(InvoiceBuilder.lastInvoice(for: rebuild, in: [invoice])?.persistentModelID == invoice.persistentModelID)
+        #expect(InvoiceBuilder.lastInvoice(for: dev.project!, in: [invoice]) == nil)
+    }
+
     @Test func fixedFeeInvoiceCoversHoursWithoutHourlyLines() {
         let covered = [entry(fixedTask, minutes: 600), entry(dev, minutes: 60)]
         let invoice = InvoiceBuilder.createInvoice(

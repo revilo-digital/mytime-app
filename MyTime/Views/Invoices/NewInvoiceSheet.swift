@@ -215,7 +215,7 @@ struct NewInvoiceSheet: View {
 
                 if candidateProjects.isEmpty {
                     Divider()
-                    Text("No unbilled time for \(client?.name ?? "this client").")
+                    Text("Nothing to invoice for \(client?.name ?? "this client").")
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)
                         .padding(24)
@@ -554,21 +554,12 @@ struct NewInvoiceSheet: View {
         BillingSummary.uninvoicedAmount(unbilled.filter { $0.task?.project?.client?.persistentModelID == client.persistentModelID })
     }
 
-    /// Projects with any unbilled time, hourly first.
     private var candidateProjects: [Project] {
-        var seen = Set<PersistentIdentifier>()
-        return clientEntries.compactMap(\.task?.project)
-            .filter { seen.insert($0.persistentModelID).inserted }
-            .sorted {
-                ($0.isArchived ? 1 : 0, $0.billingType == .hourly ? 0 : 1, $0.name)
-                    < ($1.isArchived ? 1 : 0, $1.billingType == .hourly ? 0 : 1, $1.name)
-            }
+        client.map { InvoiceBuilder.invoiceableProjects(client: $0, unbilled: unbilled) } ?? []
     }
 
     private func lastInvoice(for project: Project) -> Invoice? {
-        invoices.first { invoice in
-            invoice.entries.contains { $0.task?.project?.persistentModelID == project.persistentModelID }
-        }
+        InvoiceBuilder.lastInvoice(for: project, in: invoices)
     }
 
     private func entrySpan(_ invoice: Invoice) -> String? {
@@ -655,10 +646,13 @@ struct NewInvoiceSheet: View {
         actions = [:]
         feeLines = [:]
         extraLines = []
-        selectedProjects = Set(candidateProjects.map(\.persistentModelID))
-        // Suggest the agreed fee for fixed-fee projects that haven't been invoiced yet.
+        // Projects with no time start unticked, so a fee only goes on when it's asked for.
+        selectedProjects = Set(candidateProjects.filter { !unbilledEntries(in: $0).isEmpty }.map(\.persistentModelID))
+        // Suggest the agreed fee for fixed-fee projects that haven't been invoiced yet. Ticking a
+        // project with no time can only be for its fee, so suggest that too.
         feeIncluded = Set(candidateProjects
-            .filter { $0.billingType == .fixedFee && ($0.fixedFee ?? 0) > 0 && lastInvoice(for: $0) == nil }
+            .filter { $0.billingType == .fixedFee && ($0.fixedFee ?? 0) > 0
+                && (lastInvoice(for: $0) == nil || unbilledEntries(in: $0).isEmpty) }
             .map(\.persistentModelID))
     }
 
