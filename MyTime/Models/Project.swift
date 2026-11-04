@@ -21,6 +21,10 @@ final class Project {
     var isArchived: Bool
     var isFavourite: Bool
     var createdAt: Date
+    /// Folders whose AI-tool activity belongs to this project, one path per line. Use `folders`.
+    var activityFoldersRaw: String = ""
+    /// The task that activity in those folders is suggested on.
+    var activityTaskID: UUID?
 
     @Relationship(deleteRule: .cascade, inverse: \TaskType.project)
     var tasks: [TaskType] = []
@@ -48,5 +52,22 @@ final class Project {
         self.isArchived = false
         self.isFavourite = false
         self.createdAt = .now
+    }
+}
+
+extension Project {
+    /// Standardised absolute paths, without duplicates.
+    var folders: [String] {
+        get { activityFoldersRaw.split(separator: "\n").map(String.init).filter { !$0.isEmpty } }
+        set {
+            var seen = Set<String>()
+            activityFoldersRaw = newValue.map(ActivityTracker.normalize).filter { seen.insert($0).inserted }.joined(separator: "\n")
+        }
+    }
+
+    /// The task activity is suggested on, if it can still take time.
+    var activityTask: TaskType? {
+        guard let activityTaskID else { return nil }
+        return tasks.first { $0.uuid == activityTaskID && $0.isSelectable }
     }
 }

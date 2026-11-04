@@ -4,7 +4,7 @@ import SwiftData
 enum Persistence {
     static let schema = Schema([
         Client.self, EndClient.self, Project.self, TaskType.self, TimeEntry.self, Invoice.self, InvoiceLine.self,
-        BusinessSettings.self,
+        BusinessSettings.self, ActivityBeat.self, ActivityNote.self,
     ])
 
     /// ~/Library/Application Support/MyTime — kept explicit so backups can find the store.

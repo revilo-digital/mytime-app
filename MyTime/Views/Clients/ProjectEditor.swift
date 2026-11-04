@@ -102,6 +102,8 @@ struct ProjectEditor: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
+
+                activitySection
             }
             .formStyle(.grouped)
 
@@ -137,6 +139,51 @@ struct ProjectEditor: View {
             project.endClient = endClient
         }
         try? context.save()
+    }
+
+    private var activitySection: some View {
+        Section {
+            ForEach(project.folders, id: \.self) { folder in
+                HStack {
+                    Image(systemName: "folder").foregroundStyle(.secondary)
+                    Text(ActivityTracker.abbreviate(folder))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(folder)
+                    Spacer()
+                    Button {
+                        project.folders.removeAll { $0 == folder }
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Stop suggesting activity in this folder")
+                }
+            }
+            Button("Add Folder…", action: addFolders)
+            if !project.folders.isEmpty {
+                Picker("Suggest time on", selection: $project.activityTaskID) {
+                    Text("Ask each time").tag(UUID?.none)
+                    ForEach(tasks.filter(\.isSelectable)) { Text($0.name).tag(Optional($0.uuid)) }
+                }
+            }
+        } header: {
+            Text("AI activity")
+        } footer: {
+            Text("Time Claude Code or Cursor spends working in these folders (or inside them) is suggested on your timesheet to add.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func addFolders() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Add"
+        panel.message = "Choose the repositories or folders you work on for \(project.name)."
+        guard panel.runModal() == .OK else { return }
+        project.folders += panel.urls.map(\.path)
     }
 
     private var settings: BusinessSettings { BusinessSettings.current(in: context) }

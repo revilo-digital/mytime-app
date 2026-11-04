@@ -7,6 +7,7 @@ struct MyTimeApp: App {
     private let container: ModelContainer
     @State private var timer: TimerService
     @State private var awayMonitor: AwayMonitor?
+    @State private var activityPoller: ActivityPoller?
 
     init() {
         // Unit tests are hosted in the app; keep them away from the real store.
@@ -27,6 +28,9 @@ struct MyTimeApp: App {
             away.onReturn = { report in Task { @MainActor in AwayPrompt.present(report, timer: timer) } }
             away.start()
             _awayMonitor = State(initialValue: away)
+            let activity = ActivityPoller(context: container.mainContext, timer: timer)
+            activity.start()
+            _activityPoller = State(initialValue: activity)
         }
     }
 

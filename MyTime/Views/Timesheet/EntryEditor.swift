@@ -92,8 +92,8 @@ struct EntryEditor: View {
         }
         .frame(width: 460)
         .onAppear(perform: load)
-        .onChange(of: task) { _, newTask in
-            if loaded, existing == nil { isBillable = RateResolver.isBillable(newTask) }
+        .onChange(of: task?.persistentModelID) {
+            if loaded, existing == nil { isBillable = RateResolver.isBillable(task) }
         }
     }
 

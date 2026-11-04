@@ -122,6 +122,9 @@ private struct WeekContent: View {
     @Binding var editTarget: EntryEditTarget?
 
     @Query private var entries: [TimeEntry]
+    @Query private var beats: [ActivityBeat]
+    @Query private var notes: [ActivityNote]
+    @Query private var projects: [Project]
 
     init(timer: TimerService, weekStart: Date, mode: TimesheetMode, selectedDay: Binding<Date>, editTarget: Binding<EntryEditTarget?>) {
         self.timer = timer
@@ -134,16 +137,25 @@ private struct WeekContent: View {
             filter: #Predicate<TimeEntry> { $0.date >= weekStart && $0.date < end },
             sort: [SortDescriptor(\TimeEntry.date), SortDescriptor(\TimeEntry.createdAt)]
         )
+        _beats = Query(filter: #Predicate<ActivityBeat> { $0.at >= weekStart && $0.at < end })
+        _notes = Query(filter: #Predicate<ActivityNote> { $0.at >= weekStart && $0.at < end })
+    }
+
+    private var suggestions: [ActivityTracker.Suggestion] {
+        ActivityTracker.suggestions(beats, notes: notes, projects: projects)
     }
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 15)) { context in
             switch mode {
             case .day:
+                let suggestions = suggestions
                 VStack(spacing: 0) {
-                    DayStrip(weekStart: weekStart, entries: entries, now: context.date, selectedDay: $selectedDay)
+                    DayStrip(weekStart: weekStart, entries: entries, now: context.date,
+                             suggestionDays: Set(suggestions.map(\.day)), selectedDay: $selectedDay)
                         .padding(.horizontal, 24)
                         .padding(.bottom, 16)
+                    ActivityReviewBanner(suggestions: suggestions.filter { $0.day == selectedDay })
                     DayEntryList(
                         timer: timer,
                         day: selectedDay,
@@ -165,6 +177,8 @@ private struct DayStrip: View {
     let weekStart: Date
     let entries: [TimeEntry]
     let now: Date
+    /// Days with AI-tool activity waiting to be added.
+    let suggestionDays: Set<Date>
     @Binding var selectedDay: Date
 
     var body: some View {
@@ -200,6 +214,12 @@ private struct DayStrip: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 0)
+                    if suggestionDays.contains(day) {
+                        Image(systemName: "sparkles")
+                            .font(.caption2)
+                            .foregroundStyle(.purple)
+                            .help("AI activity to review")
+                    }
                     if isRunning {
                         Circle().fill(.red).frame(width: 6, height: 6)
                     } else if isToday {

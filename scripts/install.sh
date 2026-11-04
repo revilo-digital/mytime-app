@@ -13,6 +13,16 @@ cp -R build/Build/Products/Release/MyTime.app /Applications/
 open /Applications/MyTime.app
 echo "Installed /Applications/MyTime.app"
 
+# The Claude Code / Cursor hook lives at a fixed path so tool settings don't depend on where this repo is.
+hooks="$HOME/Library/Application Support/MyTime/Hooks"
+mkdir -p "$hooks"
+cp scripts/activity-hook.sh "$hooks/activity-hook.sh"
+chmod +x "$hooks/activity-hook.sh"
+
+# The /mytime skill tells Claude Code how to log a label for its work.
+mkdir -p "$HOME/.claude/skills/mytime"
+cp scripts/claude-skill/mytime/SKILL.md "$HOME/.claude/skills/mytime/SKILL.md"
+
 # Keep a copy of the built app next to the data backups, so a new Mac can run it without Xcode.
 icloud="$HOME/Library/Mobile Documents/com~apple~CloudDocs"
 if [[ -d "$icloud" ]]; then
