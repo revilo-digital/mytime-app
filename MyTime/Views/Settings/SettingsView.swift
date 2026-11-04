@@ -29,6 +29,7 @@ struct SettingsView: View {
 private struct GeneralSettings: View {
     @State private var launchAtLogin = LoginItem.isEnabled
     @State private var loginError: String?
+    @AppStorage(AwayMonitor.thresholdKey) private var awayMinutes = AwayMonitor.defaultThresholdMinutes
 
     private var isInstalled: Bool {
         Bundle.main.bundleURL.path.hasPrefix("/Applications/")
@@ -57,6 +58,19 @@ private struct GeneralSettings: View {
                     Text("MyTime isn't running from /Applications, so launch at login may point at a build folder.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+            }
+            Section("Away from the Mac") {
+                Picker("Ask about time away after", selection: $awayMinutes) {
+                    ForEach(AwayMonitor.thresholdChoices, id: \.self) { minutes in
+                        Text(minutes == 0 ? "Never" : "\(minutes) minutes").tag(minutes)
+                    }
+                }
+                Text(awayMinutes == 0
+                     ? "Timers keep running however long you're away."
+                     : "With a timer running and no keyboard or mouse use for this long, MyTime asks when you're back "
+                        + "whether to keep or remove that time. Sleeping or locking the Mac counts as away straight "
+                        + "away. If you're still away at midnight, the timer stops at the moment you left.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Keyboard shortcuts") {
                 KeyboardShortcuts.Recorder("Show timer", name: .showTimer)

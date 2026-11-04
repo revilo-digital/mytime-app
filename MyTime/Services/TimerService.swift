@@ -106,6 +106,37 @@ final class TimerService {
         for entry in activeEntries { pause(entry, now: now) }
     }
 
+    /// Takes time away from the Mac off every running timer: each is cut back to `awaySince` (or its start,
+    /// if later). With `keepRunning` the timers pick up again from `backAt`; otherwise they stop at `awaySince`.
+    /// Returns each timer with the seconds left out, so the time can be put back.
+    @discardableResult
+    func removeAwayTime(since awaySince: Date, backAt: Date, keepRunning: Bool) -> [(entry: TimeEntry, removed: TimeInterval)] {
+        var removed: [(entry: TimeEntry, removed: TimeInterval)] = []
+        for entry in activeEntries {
+            guard let startedAt = entry.startedAt else { continue }
+            let cutoff = max(awaySince, startedAt)
+            removed.append((entry, max(0, backAt.timeIntervalSince(cutoff))))
+            finish(entry, at: cutoff)
+            if keepRunning {
+                entry.startedAt = max(backAt, cutoff)
+                entry.endedAt = nil
+            }
+        }
+        if !keepRunning { activeEntries.removeAll() }
+        save()
+        return removed
+    }
+
+    /// Puts back time that `removeAwayTime` left out of stopped timers.
+    func restoreAwayTime(_ removed: [(entry: TimeEntry, removed: TimeInterval)]) {
+        for (entry, seconds) in removed where !entry.isLocked {
+            entry.durationSeconds += seconds
+            if !entry.isRunning, let endedAt = entry.endedAt { entry.endedAt = endedAt.addingTimeInterval(seconds) }
+        }
+        save()
+        refresh()
+    }
+
     /// Takes a paused timer off the Paused list; its time is already recorded.
     func stopPaused(_ entry: TimeEntry) {
         entry.isPaused = false
