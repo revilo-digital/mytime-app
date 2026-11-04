@@ -25,6 +25,16 @@ never leaves your machine unless you back it up to iCloud Drive yourself.
     elapsed time is always worked out from it.
 - **Timesheet**
   - Day and week views, click-to-edit entries, and totals for today, the week, billable time and uninvoiced time.
+- **Review tab: time from AI coding tools**
+  - A Claude Code hook records when it works in a repo, and MyTime also reads your own commits there. Each
+    project's day becomes one suggestion to review: pick a task and add it, or dismiss it. Nothing reaches the
+    timesheet without you.
+  - A day's work stays one record. Accepting adds to that day's entry for the task, and repeated or similar
+    labels merge.
+  - Ask Claude to "log this to MyTime" (`/mytime`) and it adds a 1–3 word label from the session or today's
+    commits, which becomes the invoice note.
+  - Unlinked folders beside a linked one with a similar name are matched to its project. The task defaults to
+    the one you chose or last tracked, and favourite and recent tasks are one click away.
 - **Real time, not decimals**
   - Everything is shown as `h:mm`. Money is calculated from exact whole minutes, so 0:41 at $150/h is $102.50.
     Nothing is rounded to 0.68 h first.
@@ -87,7 +97,7 @@ xcodebuild test -project MyTime.xcodeproj -scheme MyTime -destination 'platform=
 ```
 
 The tests use Swift Testing with an in-memory store. They cover the timer (including crash recovery), rate
-resolution, invoice building and totals, PDF layout, backups and restore, and the task-template tools.
+resolution, invoice building and totals, PDF layout, backups and restore, the task-template tools, and AI activity suggestions.
 
 ## First run
 
@@ -99,6 +109,36 @@ resolution, invoice building and totals, PDF layout, backups and restore, and th
 The defaults are New Zealand ones: NZD, 15% GST, dd/MM/yyyy dates, and invoices due on the 20th of the following
 month. Tax rate and payment terms can be changed in Settings. Currency and date format are currently set in
 `MyTime/Utilities/Money.swift`.
+
+## AI activity (Claude Code, Cursor)
+
+`install.sh` copies a hook to `~/Library/Application Support/MyTime/Hooks/activity-hook.sh` and a `/mytime`
+skill to `~/.claude/skills/mytime/`. To turn it on, add the hook to Claude Code in `~/.claude/settings.json`:
+
+```json
+"hooks": {
+  "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "\"$HOME/Library/Application Support/MyTime/Hooks/activity-hook.sh\" claude", "timeout": 5 }] }],
+  "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "\"$HOME/Library/Application Support/MyTime/Hooks/activity-hook.sh\" claude", "timeout": 5 }] }],
+  "Stop": [{ "hooks": [{ "type": "command", "command": "\"$HOME/Library/Application Support/MyTime/Hooks/activity-hook.sh\" claude", "timeout": 5 }] }]
+}
+```
+
+Then link each project to its repo folders under Projects › edit › **AI activity**, or tick "Always for this
+folder" the first time you add a suggestion from it.
+
+- The hook appends `{"at", "folder", "source"}` lines to `Activity/inbox.jsonl` next to the store, and MyTime
+  reads it every minute. Worktrees count towards the repo's main checkout.
+- Activity up to 15 minutes apart makes one block. Activity on a project whose timer is running is ignored.
+- Every five minutes MyTime reads your commits in linked repos: any branch, by the repo's `user.email`, from
+  today on. Commits up to 90 minutes apart are one stretch of work, which starts 30 minutes before the first
+  commit. Overlap with measured time counts once.
+- A folder that isn't linked but sits beside a linked one with a similar name (`helpdesk` beside
+  `helpdesk-chat-bot`) is suggested for that project.
+- Settings › **AI Activity** sets rounding (up to 5 minutes by default), hides suggestions under a minimum
+  (5 minutes, unless labelled), and lists folders you've ignored from a card's Dismiss menu.
+
+Any other tool can call the same script with its own source name (e.g. `activity-hook.sh cursor`) from the
+project folder, or with `CLAUDE_PROJECT_DIR` set to it.
 
 ## Where your data lives
 
