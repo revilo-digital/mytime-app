@@ -295,7 +295,7 @@ private struct DayEntryList: View {
 
     private func delete(_ entry: TimeEntry) {
         if entry.isRunning {
-            timer.cancel()
+            timer.cancel(entry)
         } else {
             context.delete(entry)
             try? context.save()
@@ -357,9 +357,9 @@ private struct EntryRow: View {
 
             HStack(spacing: 8) {
                 if entry.isRunning {
-                    Button { timer.pause() } label: { Label("Pause", systemImage: "pause.fill") }
+                    Button { timer.pause(entry) } label: { Label("Pause", systemImage: "pause.fill") }
                         .buttonStyle(.bordered)
-                    Button { timer.stop() } label: { Label("Stop", systemImage: "stop.fill") }
+                    Button { timer.stop(entry) } label: { Label("Stop", systemImage: "stop.fill") }
                         .buttonStyle(.borderedProminent)
                         .tint(.red)
                 } else if !entry.isLocked {

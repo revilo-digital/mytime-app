@@ -74,7 +74,7 @@ struct EntryEditor: View {
                     }
                     .confirmationDialog("Delete this entry?", isPresented: $confirmDelete) {
                         Button("Delete", role: .destructive) {
-                            if existing.isRunning { timer.cancel() } else { context.delete(existing); try? context.save() }
+                            if existing.isRunning { timer.cancel(existing) } else { context.delete(existing); try? context.save() }
                             dismiss()
                         }
                     } message: {

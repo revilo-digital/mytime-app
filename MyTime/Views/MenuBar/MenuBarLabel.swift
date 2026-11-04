@@ -19,13 +19,19 @@ struct MenuBarLabel: View {
         // Menu bar labels only render plain Text/Image, so the pill is drawn as an image,
         // redrawn off the service's 15s tick.
         let now = max(timer.tick, .now)
-        if timer.activeEntry != nil {
-            Image(nsImage: MenuBarPill.image(DurationFormat.short(timer.elapsed(at: now)), running: true))
+        if timer.isRunning {
+            Image(nsImage: MenuBarPill.image(Self.runningText(timer.activeEntries, at: now), running: true))
         } else if case let total = timer.todayTotal(at: now), total >= 60 {
             Image(nsImage: MenuBarPill.image(DurationFormat.short(total), running: false))
         } else {
             Image(nsImage: ChevronMark.menuBarIcon)
         }
+    }
+
+    /// Each running timer's time, newest first; past two, the newest plus a count of the rest.
+    static func runningText(_ running: [TimeEntry], at now: Date) -> String {
+        let times = running.reversed().map { DurationFormat.short($0.liveDuration(at: now)) }
+        return times.count > 2 ? "\(times[0]) +\(times.count - 1)" : times.joined(separator: " · ")
     }
 }
 

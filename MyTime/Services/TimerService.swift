@@ -2,13 +2,15 @@ import Foundation
 import Observation
 import SwiftData
 
-/// Owns the single running timer and any paused ones. Only timestamps are persisted; elapsed time is derived.
-/// Switching to another task pauses the running timer; only Stop takes a timer off the Paused list.
+/// Owns the running timers and any paused ones. Only timestamps are persisted; elapsed time is derived.
+/// Switching to another task pauses whatever is running; starting one alongside keeps the others going,
+/// and each running timer records its full time. Only Stop takes a timer off the Paused list.
 @MainActor
 @Observable
 final class TimerService {
     private let context: ModelContext
-    private(set) var activeEntry: TimeEntry?
+    /// Running timers, oldest first.
+    private(set) var activeEntries: [TimeEntry] = []
     /// Refreshed every 15s so plain views (like the menu bar label, which can't host
     /// TimelineView) redraw with the current elapsed time.
     private(set) var tick = Date.now
@@ -28,19 +30,14 @@ final class TimerService {
         self.ticker = ticker
     }
 
-    /// Finds a timer left running by a previous launch (quit, crash or reboot).
-    /// If somehow more than one is running, keeps the most recent and stops the rest.
+    /// Finds timers left running by a previous launch (quit, crash or reboot).
     /// Timers paused on an earlier day are stopped, so the Paused list starts each day empty.
     func recover(now: Date = .now) {
         let descriptor = FetchDescriptor<TimeEntry>(
             predicate: #Predicate { $0.startedAt != nil && $0.endedAt == nil },
-            sortBy: [SortDescriptor(\.startedAt, order: .reverse)]
+            sortBy: [SortDescriptor(\.startedAt)]
         )
-        let running = (try? context.fetch(descriptor)) ?? []
-        activeEntry = running.first
-        for stale in running.dropFirst() {
-            finish(stale, at: now)
-        }
+        activeEntries = (try? context.fetch(descriptor)) ?? []
         let today = Calendar.current.startOfDay(for: now)
         let oldPaused = FetchDescriptor<TimeEntry>(predicate: #Predicate { $0.isPaused && $0.date < today })
         for entry in (try? context.fetch(oldPaused)) ?? [] {
@@ -49,50 +46,64 @@ final class TimerService {
         save()
     }
 
-    /// Starts timing a task, pausing whatever was running first. With no note, today's entry for the
-    /// same task is picked up again, paused or stopped, rather than starting a second one at zero.
+    /// Starts timing a task, pausing whatever was running first unless it runs `alongside`. With no note,
+    /// today's entry for the same task is picked up again, paused or stopped, rather than starting a second one at zero.
     @discardableResult
-    func start(task: TaskType, note: String = "", now: Date = .now) -> TimeEntry {
+    func start(task: TaskType, note: String = "", alongside: Bool = false, now: Date = .now) -> TimeEntry {
         if note.isEmpty, let existing = entryToContinue(for: task, now: now) {
-            resume(existing, now: now)
+            resume(existing, alongside: alongside, now: now)
             return existing
         }
-        pause(now: now)
+        if !alongside { pauseAll(now: now) }
         let entry = TimeEntry(task: task, date: now, note: note)
         entry.startedAt = now
         context.insert(entry)
-        activeEntry = entry
+        activeEntries.append(entry)
         remember(task)
         save()
         return entry
     }
 
-    /// Continues an existing unlocked entry, adding time to it, and pauses whatever was running.
-    func resume(_ entry: TimeEntry, now: Date = .now) {
-        guard !entry.isLocked, !entry.isRunning else { return }
-        pause(now: now)
+    /// Continues an existing unlocked entry, adding time to it, and pauses whatever was running
+    /// unless it runs `alongside`.
+    func resume(_ entry: TimeEntry, alongside: Bool = false, now: Date = .now) {
+        guard !entry.isLocked else { return }
+        if !alongside {
+            for other in activeEntries where other !== entry { pause(other, now: now) }
+        }
+        guard !entry.isRunning else { return }
         entry.startedAt = now
         entry.endedAt = nil
         entry.isPaused = false
-        activeEntry = entry
+        activeEntries.append(entry)
         if let task = entry.task { remember(task) }
         save()
     }
 
-    func stop(now: Date = .now) {
-        guard let entry = activeEntry else { return }
+    var isRunning: Bool { !activeEntries.isEmpty }
+
+    func stop(_ entry: TimeEntry, now: Date = .now) {
+        guard entry.isRunning else { return }
         finish(entry, at: now)
-        activeEntry = nil
+        activeEntries.removeAll { $0 === entry }
         save()
     }
 
-    /// Banks the running timer's time and parks it on the Paused list.
-    func pause(now: Date = .now) {
-        guard let entry = activeEntry else { return }
+    func stopAll(now: Date = .now) {
+        for entry in activeEntries { stop(entry, now: now) }
+    }
+
+    /// Banks a running timer's time and parks it on the Paused list.
+    func pause(_ entry: TimeEntry, now: Date = .now) {
+        guard entry.isRunning else { return }
         finish(entry, at: now)
         entry.isPaused = true
-        activeEntry = nil
+        activeEntries.removeAll { $0 === entry }
         save()
+    }
+
+    func pauseAll(now: Date = .now) {
+        for entry in activeEntries { pause(entry, now: now) }
     }
 
     /// Takes a paused timer off the Paused list; its time is already recorded.
@@ -131,21 +142,21 @@ final class TimerService {
         return ((try? context.fetch(descriptor)) ?? []).reduce(0) { $0 + $1.liveDuration(at: now) }
     }
 
-    /// Redraws the menu bar time now, e.g. after the running entry was edited.
+    /// Redraws the menu bar time now, e.g. after a running entry was edited.
     func refresh() { tick = .now }
 
-    /// Discards the running entry entirely.
-    func cancel() {
-        guard let entry = activeEntry else { return }
+    /// Discards a running entry entirely.
+    func cancel(_ entry: TimeEntry) {
+        guard entry.isRunning else { return }
+        activeEntries.removeAll { $0 === entry }
         context.delete(entry)
-        activeEntry = nil
         save()
     }
 
-    /// Global-hotkey behaviour: stop if running, otherwise restart the last-used task.
+    /// Global-hotkey behaviour: stop everything running, otherwise restart the last-used task.
     func toggleLast(now: Date = .now) {
-        if activeEntry != nil {
-            stop(now: now)
+        if isRunning {
+            stopAll(now: now)
         } else if let task = lastUsedTask() {
             start(task: task, now: now)
         }
@@ -168,10 +179,6 @@ final class TimerService {
     /// Remembers the task for the popover's pickers and the start/stop hotkey.
     func remember(_ task: TaskType) {
         defaults.set(task.uuid.uuidString, forKey: Self.lastTaskKey)
-    }
-
-    func elapsed(at now: Date = .now) -> TimeInterval {
-        activeEntry?.liveDuration(at: now) ?? 0
     }
 
     private func finish(_ entry: TimeEntry, at now: Date) {

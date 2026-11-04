@@ -15,6 +15,8 @@ struct TimerPopover: View {
     @State private var note = ""
     @State private var editingID: PersistentIdentifier?
     @State private var addingEntry = false
+    /// Showing the task picker to start another timer while one is running.
+    @State private var startingAlongside = false
 
     /// Active tasks on active projects and clients, sorted by path ("Client / End client / Project / Task").
     private var tasks: [TaskType] {
@@ -40,8 +42,21 @@ struct TimerPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            if let active = timer.activeEntry {
-                RunningTimerView(timer: timer, entry: active)
+            if timer.isRunning {
+                ForEach(timer.activeEntries) { entry in
+                    RunningTimerView(timer: timer, entry: entry, compact: timer.activeEntries.count > 1,
+                                     isPrimary: !startingAlongside && entry === timer.activeEntries.last)
+                }
+                if startingAlongside {
+                    startView
+                } else {
+                    Button { startingAlongside = true } label: {
+                        Label("Run another timer alongside", systemImage: "plus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.callout)
+                    .help("Start a second timer without stopping this one — both record their full time")
+                }
             } else {
                 startView
             }
@@ -82,7 +97,10 @@ struct TimerPopover: View {
         .padding(20)
         .frame(width: 380)
         .onAppear(perform: restoreSelection)
-        .onChange(of: timer.activeEntry?.persistentModelID) { restoreSelection() }
+        .onChange(of: timer.activeEntries.map(\.persistentModelID)) {
+            startingAlongside = false
+            restoreSelection()
+        }
         .onChange(of: selectedTask?.persistentModelID) {
             // Remember picks straight away, even before Start is pressed.
             if let selectedTask { timer.remember(selectedTask) }
@@ -93,18 +111,27 @@ struct TimerPopover: View {
 
     private var startView: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Start timer").font(.title3.weight(.semibold))
+            HStack {
+                Text(startingAlongside ? "Start another timer" : "Start timer").font(.title3.weight(.semibold))
+                Spacer()
+                if startingAlongside {
+                    Button { startingAlongside = false } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                        .help("Cancel")
+                }
+            }
             TaskPicker(selection: $selectedTask)
                 .labelsHidden()
                 .controlSize(.large)
             NoteField(text: $note, placeholder: "What are you working on?", onSubmit: startSelected)
             Button(action: startSelected) {
-                Label("Start", systemImage: "play.fill").frame(maxWidth: .infinity)
+                Label(startingAlongside ? "Start alongside" : "Start", systemImage: "play.fill").frame(maxWidth: .infinity)
             }
             .controlSize(.extraLarge)
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)
-            .disabled(selectedTask == nil)
+            .disabled(selectedTask == nil || selectedTask.map(isRunning) == true)
             if tasks.isEmpty {
                 Text("Add a client, project and task in MyTime first.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -131,7 +158,7 @@ struct TimerPopover: View {
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 2)
             ForEach(tasks) { task in
-                let isActive = timer.activeEntry?.task?.persistentModelID == task.persistentModelID
+                let isActive = isRunning(task)
                 let hasEntryToday = todaysEntries.contains { !$0.isLocked && $0.task?.persistentModelID == task.persistentModelID }
                 HStack {
                     Button {
@@ -149,7 +176,10 @@ struct TimerPopover: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(isActive)
-                    .help(hasEntryToday ? "Continue today's timer" : timer.activeEntry == nil ? "Start timer" : "Switch to this task")
+                    .help(hasEntryToday ? "Continue today's timer" : timer.isRunning ? "Switch to this task" : "Start timer")
+                    if timer.isRunning, !isActive {
+                        AlongsideButton { start(task, note: "", alongside: true) }
+                    }
                     FavouriteStar(task: task)
                 }
                 .padding(.vertical, 3)
@@ -201,19 +231,23 @@ struct TimerPopover: View {
 
     private func startSelected() {
         guard let task = selectedTask else { return }
-        start(task, note: note)
+        start(task, note: note, alongside: startingAlongside)
         note = ""
     }
 
-    private func start(_ task: TaskType, note: String) {
-        timer.start(task: task, note: note)
+    private func start(_ task: TaskType, note: String, alongside: Bool = false) {
+        timer.start(task: task, note: note, alongside: alongside)
         lastTaskID = task.uuid.uuidString
         selectedTask = task
     }
 
+    private func isRunning(_ task: TaskType) -> Bool {
+        timer.activeEntries.contains { $0.task?.persistentModelID == task.persistentModelID }
+    }
+
     /// Shows the remembered project and task — the last one picked or tracked.
     private func restoreSelection() {
-        guard timer.activeEntry == nil else { return }
+        guard !timer.isRunning else { return }
         if let remembered = timer.lastUsedTask(),
            remembered.persistentModelID != selectedTask?.persistentModelID {
             selectedTask = remembered
@@ -226,41 +260,44 @@ struct TimerPopover: View {
 private struct RunningTimerView: View {
     let timer: TimerService
     @Bindable var entry: TimeEntry
+    /// A one-row card when several timers are stacked.
+    var compact = false
+    /// The newest timer gets the Return-key Stop, so there's only one default button.
+    var isPrimary = true
 
     @State private var confirmDiscard = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Circle().fill(.red).frame(width: 7, height: 7)
-                    Text("Running").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    Spacer()
-                    if let started = entry.startedAt {
-                        Text("since \(started.formatted(date: .omitted, time: .shortened))")
-                            .font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: compact ? 10 : 14) {
+            Group {
+                if compact {
+                    HStack(spacing: 10) {
+                        taskLabel(tileSize: 28)
+                        Spacer(minLength: 8)
+                        VStack(alignment: .trailing, spacing: 0) {
+                            clock(size: 26)
+                            since
+                        }
                     }
-                }
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(DurationFormat.clock(timer.elapsed(at: context.date)))
-                        .font(.system(size: 44, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                        .contentTransition(.numericText())
-                }
-                HStack(spacing: 10) {
-                    ClientTile(client: entry.task?.project?.client, size: 36)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(entry.task?.project?.client?.name ?? "").font(.caption).foregroundStyle(.secondary)
-                        Text(entry.task?.shortPath ?? "No task").font(.headline)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Circle().fill(.red).frame(width: 7, height: 7)
+                            Text("Running").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            Spacer()
+                            since
+                        }
+                        clock(size: 44)
+                        taskLabel(tileSize: 36)
                     }
                 }
             }
-            .padding(16)
+            .padding(compact ? 12 : 16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.quaternary.opacity(0.6), in: .rect(cornerRadius: 14))
             .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.separator.opacity(0.6)))
 
-            NoteField(text: $entry.note, placeholder: "Add a note")
+            NoteField(text: $entry.note, placeholder: "Add a note", lines: compact ? 1...4 : 3...6)
 
             // Confirm inline: a confirmationDialog from the menu bar window never runs its action.
             if confirmDiscard {
@@ -272,7 +309,7 @@ private struct RunningTimerView: View {
                         Spacer()
                         Button("Keep") { confirmDiscard = false }
                             .keyboardShortcut(.cancelAction)
-                        Button("Discard", role: .destructive) { timer.cancel() }
+                        Button("Discard", role: .destructive) { timer.cancel(entry) }
                             .buttonStyle(.borderedProminent)
                             .tint(.red)
                     }
@@ -284,27 +321,54 @@ private struct RunningTimerView: View {
         .onChange(of: entry.persistentModelID) { confirmDiscard = false }
     }
 
+    private func clock(size: CGFloat) -> some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            Text(DurationFormat.clock(entry.liveDuration(at: context.date)))
+                .font(.system(size: size, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .contentTransition(.numericText())
+        }
+    }
+
+    @ViewBuilder
+    private var since: some View {
+        if let started = entry.startedAt {
+            Text("since \(started.formatted(date: .omitted, time: .shortened))")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func taskLabel(tileSize: CGFloat) -> some View {
+        HStack(spacing: 10) {
+            ClientTile(client: entry.task?.project?.client, size: tileSize)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.task?.project?.client?.name ?? "").font(.caption).foregroundStyle(.secondary)
+                Text(entry.task?.shortPath ?? "No task").font(.headline).lineLimit(1)
+            }
+        }
+    }
+
     private var actions: some View {
         HStack(spacing: 10) {
             Button {
-                timer.pause()
+                timer.pause(entry)
             } label: {
                 Label("Pause", systemImage: "pause.fill").frame(maxWidth: .infinity)
             }
-            .controlSize(.extraLarge)
+            .controlSize(compact ? .large : .extraLarge)
             .help("Pause — pick it up again from the Paused list")
             Button {
-                timer.stop()
+                timer.stop(entry)
             } label: {
                 Label("Stop", systemImage: "stop.fill").frame(maxWidth: .infinity)
             }
-            .controlSize(.extraLarge)
+            .controlSize(compact ? .large : .extraLarge)
             .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.defaultAction)
+            .keyboardShortcut(isPrimary ? .defaultAction : nil)
             Button(role: .destructive) { confirmDiscard = true } label: {
                 Image(systemName: "trash")
             }
-            .controlSize(.extraLarge)
+            .controlSize(compact ? .large : .extraLarge)
             .help("Discard this timer")
         }
     }
@@ -333,7 +397,21 @@ private struct FavouriteStar: View {
     }
 }
 
-/// A paused timer: resume it (pausing whatever is running) or stop it for good.
+/// Starts a timer without pausing the running ones.
+private struct AlongsideButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "plus.circle")
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .help("Run alongside — keeps the current timer going, both record their full time")
+    }
+}
+
+/// A paused timer: resume it (pausing whatever is running) or run it alongside, or stop it for good.
 private struct PausedTimerRow: View {
     let entry: TimeEntry
     let timer: TimerService
@@ -344,7 +422,10 @@ private struct PausedTimerRow: View {
                 Image(systemName: "play.circle.fill").font(.title2)
             }
             .buttonStyle(.borderless)
-            .help(timer.activeEntry == nil ? "Resume" : "Switch to this timer (pauses the running one)")
+            .help(timer.isRunning ? "Switch to this timer (pauses the running one)" : "Resume")
+            if timer.isRunning {
+                AlongsideButton { timer.resume(entry, alongside: true) }
+            }
             ClientTile(client: entry.task?.project?.client, size: 22)
             VStack(alignment: .leading, spacing: 1) {
                 Text(entry.task?.path ?? "No task").lineLimit(1)
@@ -386,12 +467,13 @@ private struct ClientTile: View {
 private struct NoteField: View {
     @Binding var text: String
     var placeholder: String
+    var lines: ClosedRange<Int> = 3...6
     var onSubmit: () -> Void = {}
 
     var body: some View {
         TextField(placeholder, text: $text, axis: .vertical)
             .textFieldStyle(.plain)
-            .lineLimit(3...6)
+            .lineLimit(lines)
             .font(.body)
             .padding(10)
             .background(.background.opacity(0.5), in: .rect(cornerRadius: 10))
@@ -450,7 +532,10 @@ private struct PopoverEntryRow: View {
             } else if !isEditing {
                 Button { timer.resume(entry) } label: { Image(systemName: "play.circle") }
                     .buttonStyle(.borderless)
-                    .help("Continue this entry")
+                    .help(timer.isRunning ? "Continue this entry (pauses the running timer)" : "Continue this entry")
+                if timer.isRunning {
+                    AlongsideButton { timer.resume(entry, alongside: true) }
+                }
             }
             TimelineView(.periodic(from: .now, by: 15)) { context in
                 Text(DurationFormat.short(entry.liveDuration(at: context.date)))
@@ -526,7 +611,7 @@ private struct PopoverEntryRow: View {
     }
 
     private func delete() {
-        if entry.isRunning { timer.cancel() } else { context.delete(entry); try? context.save() }
+        if entry.isRunning { timer.cancel(entry) } else { context.delete(entry); try? context.save() }
         isEditing = false
     }
 
