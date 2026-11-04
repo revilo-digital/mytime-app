@@ -70,4 +70,16 @@ extension Project {
         guard let activityTaskID else { return nil }
         return tasks.first { $0.uuid == activityTaskID && $0.isSelectable }
     }
+
+    /// The task to suggest activity on: the chosen one, else the one last tracked here, else one named
+    /// "Development", else the first.
+    var suggestedTask: TaskType? {
+        if let activityTask { return activityTask }
+        let usable = tasks.filter(\.isSelectable)
+        let recent = usable.compactMap { task in task.entries.map(\.createdAt).max().map { (task, $0) } }
+            .max { $0.1 < $1.1 }?.0
+        return recent
+            ?? usable.first { $0.name.localizedCaseInsensitiveContains("development") }
+            ?? usable.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }.first
+    }
 }

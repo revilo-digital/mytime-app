@@ -17,6 +17,9 @@ struct SettingsView: View {
             Tab("Tasks", systemImage: "checklist") {
                 TaskSettingsView()
             }
+            Tab("AI Activity", systemImage: "sparkles") {
+                ActivitySettingsView()
+            }
             Tab("Backup", systemImage: "externaldrive.badge.icloud") {
                 BackupSettingsView()
             }

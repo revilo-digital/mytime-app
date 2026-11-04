@@ -8,6 +8,18 @@ struct ReviewView: View {
     @Query(sort: \ActivityBeat.at) private var beats: [ActivityBeat]
     @Query(sort: \ActivityNote.at) private var notes: [ActivityNote]
     @Query private var projects: [Project]
+    @Query(filter: #Predicate<TaskType> { !$0.isArchived }) private var allTasks: [TaskType]
+    // Read so a change in Settings redraws the suggestions.
+    @AppStorage(ActivitySettings.roundingKey) private var rounding = ActivitySettings.defaultRoundingMinutes
+    @AppStorage(ActivitySettings.minimumKey) private var minimum = ActivitySettings.defaultMinimumMinutes
+    @Query(sort: \TimeEntry.createdAt, order: .reverse) private var entries: [TimeEntry]
+
+    /// Favourites then recent tasks, as one-click choices on each card.
+    private var quickTasks: [TaskType] {
+        let tasks = allTasks.filter(\.isSelectable).sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+        let favourites = QuickStart.favourites(tasks: tasks, entries: entries)
+        return favourites + QuickStart.recents(entries: entries, excluding: favourites)
+    }
 
     private var suggestions: [ActivityTracker.Suggestion] {
         ActivityTracker.suggestions(beats, notes: notes, projects: projects).reversed()
@@ -21,6 +33,7 @@ struct ReviewView: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 15)) { context in
             let suggestions = suggestions
+            let quickTasks = quickTasks
             if suggestions.isEmpty {
                 ContentUnavailableView {
                     Label("Nothing to review", systemImage: "sparkles")
@@ -46,7 +59,7 @@ struct ReviewView: View {
                             .padding(.horizontal, 4)
                             .padding(.top, day == days.first ? 0 : 10)
                             ForEach(forDay) { suggestion in
-                                ActivitySuggestionRow(suggestion: suggestion, timer: timer, now: context.date)
+                                ActivitySuggestionRow(suggestion: suggestion, timer: timer, now: context.date, quickTasks: quickTasks)
                             }
                         }
                     }
@@ -57,8 +70,12 @@ struct ReviewView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .task {
-            // Pick up anything logged since the last poll, so a label Claude just logged is here.
-            ActivityTracker.ingest(context: modelContext, running: timer.activeEntries)
+            // Pick up anything logged or committed since the last poll, so it's here when you look.
+            if let poller = ActivityPoller.current {
+                poller.poll(includingCommits: true)
+            } else {
+                ActivityTracker.ingest(context: modelContext, running: timer.activeEntries)
+            }
         }
     }
 
@@ -93,6 +110,7 @@ private struct ActivitySuggestionRow: View {
     let suggestion: ActivityTracker.Suggestion
     let timer: TimerService
     let now: Date
+    let quickTasks: [TaskType]
 
     @State private var task: TaskType?
     @State private var remember = true
@@ -101,11 +119,12 @@ private struct ActivitySuggestionRow: View {
     /// Set once you edit the duration, so a growing in-progress suggestion doesn't overwrite your number.
     @State private var editedDuration = false
 
-    init(suggestion: ActivityTracker.Suggestion, timer: TimerService, now: Date) {
+    init(suggestion: ActivityTracker.Suggestion, timer: TimerService, now: Date, quickTasks: [TaskType]) {
         self.suggestion = suggestion
         self.timer = timer
         self.now = now
-        _task = State(initialValue: suggestion.project?.activityTask)
+        self.quickTasks = quickTasks
+        _task = State(initialValue: (suggestion.project ?? suggestion.guess)?.suggestedTask)
         _durationText = State(initialValue: DurationFormat.short(suggestion.roundedDuration))
         _note = State(initialValue: suggestion.note)
     }
@@ -143,6 +162,14 @@ private struct ActivitySuggestionRow: View {
                     Text(title)
                         .font(.title3.weight(.medium))
                         .help(ActivityTracker.abbreviate(suggestion.folder))
+                    TextField("Note, 1–3 words (appears on invoices)", text: $note)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 520)
+                        .padding(.vertical, 3)
+                        .onChange(of: suggestion.note) { old, new in
+                            // A label logged while this is on screen joins the note, unless you've changed it.
+                            if note == old { note = new }
+                        }
                     if !times.isEmpty {
                         Text(times)
                             .font(.callout)
@@ -163,12 +190,25 @@ private struct ActivitySuggestionRow: View {
                 .help("Time to add, e.g. 1:30 or 45m")
             }
 
-            TextField("Note, 1–3 words (appears on invoices)", text: $note)
-                .textFieldStyle(.roundedBorder)
-                .onChange(of: suggestion.note) { old, new in
-                    // A label logged while this is on screen joins the note, unless you've changed it.
-                    if note == old { note = new }
+            if !quickTasks.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(quickTasks) { quick in
+                            let selected = quick.persistentModelID == task?.persistentModelID
+                            Button { task = quick } label: {
+                                HStack(spacing: 6) {
+                                    Avatar(name: quick.project?.client?.name ?? "?", size: 16, imageData: quick.project?.client?.logoData)
+                                    Text(quick.shortPath).lineLimit(1)
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(selected ? .purple : nil)
+                            .controlSize(.small)
+                            .help(quick.path)
+                        }
+                    }
                 }
+            }
 
             HStack(spacing: 10) {
                 TaskPicker(selection: $task, placeholder: "Add to project…")
@@ -182,8 +222,16 @@ private struct ActivitySuggestionRow: View {
                               : "Suggest this project's activity on this task from now on")
                 }
                 Spacer(minLength: 8)
-                Button("Dismiss") { ActivityTracker.dismiss(suggestion, context: context) }
-                    .help("Don't add this time")
+                Menu("Dismiss") {
+                    Button("Ignore \((suggestion.folder as NSString).lastPathComponent) from Now On") {
+                        ActivityTracker.ignore(suggestion.folder, context: context)
+                    }
+                } primaryAction: {
+                    ActivityTracker.dismiss(suggestion, context: context)
+                }
+                .menuStyle(.button)
+                .fixedSize()
+                .help("Don't add this time. Use the arrow to stop tracking this folder (Settings › AI Activity to undo).")
                 Button("Add to Timesheet", action: accept)
                     .buttonStyle(.borderedProminent)
                     .tint(.purple)
@@ -199,14 +247,19 @@ private struct ActivitySuggestionRow: View {
         if let project = suggestion.project {
             return TaskPicker.title(project)
         }
-        return "\((suggestion.folder as NSString).lastPathComponent) · not linked to a project"
+        let folder = (suggestion.folder as NSString).lastPathComponent
+        if let guess = suggestion.guess {
+            return "\(folder) · not linked, looks like \(TaskPicker.title(guess))"
+        }
+        return "\(folder) · not linked to a project"
     }
 
     private var times: String {
         suggestion.blocks.map { block in
             let start = block.start.formatted(date: .omitted, time: .shortened)
             let end = block.end.formatted(date: .omitted, time: .shortened)
-            return start == end ? start : "\(start)–\(end)"
+            let range = start == end ? start : "\(start)–\(end)"
+            return block.fromCommits ? "\(range) (commits)" : range
         }
         .joined(separator: " · ")
     }

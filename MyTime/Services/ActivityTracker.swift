@@ -1,6 +1,57 @@
 import Foundation
 import SwiftData
 
+/// Your choices for AI activity: how suggested time is rounded, the smallest suggestion worth showing, and
+/// folders whose activity is never tracked (personal or unbilled work).
+struct ActivitySettings {
+    static let roundingKey = "activityRoundingMinutes"
+    static let minimumKey = "activityMinimumMinutes"
+    static let ignoredKey = "activityIgnoredFolders"
+    static let roundingChoices = [1, 5, 6, 10, 15, 30]
+    static let minimumChoices = [0, 1, 5, 10, 15, 30]
+    static let defaultRoundingMinutes = 5
+    static let defaultMinimumMinutes = 5
+
+    /// Suggested time is rounded up to a multiple of this; 1 rounds to the nearest minute.
+    var roundingMinutes = defaultRoundingMinutes
+    /// Suggestions with less time than this, and no label, aren't shown.
+    var minimumMinutes = defaultMinimumMinutes
+    var ignoredFolders: [String] = []
+
+    /// Nearest minute, nothing hidden, nothing ignored.
+    static let exact = ActivitySettings(roundingMinutes: 1, minimumMinutes: 0)
+
+    static var current: ActivitySettings { load(.standard) }
+
+    static func load(_ defaults: UserDefaults) -> ActivitySettings {
+        ActivitySettings(
+            roundingMinutes: defaults.object(forKey: roundingKey) as? Int ?? defaultRoundingMinutes,
+            minimumMinutes: defaults.object(forKey: minimumKey) as? Int ?? defaultMinimumMinutes,
+            ignoredFolders: defaults.stringArray(forKey: ignoredKey) ?? []
+        )
+    }
+
+    func isIgnored(_ folder: String) -> Bool {
+        ignoredFolders.contains { ActivityTracker.folder($0, contains: folder) }
+    }
+
+    func rounded(_ seconds: TimeInterval) -> TimeInterval {
+        guard seconds > 0 else { return 0 }
+        guard roundingMinutes > 1 else { return (seconds / 60).rounded() * 60 }
+        let step = TimeInterval(roundingMinutes * 60)
+        // A second or two over a step isn't another step.
+        return ((seconds - 5) / step).rounded(.up) * step
+    }
+
+    /// Adds `folder` to the ignored list, or takes it off.
+    static func setIgnored(_ folder: String, _ ignored: Bool, defaults: UserDefaults = .standard) {
+        let folder = ActivityTracker.normalize(folder)
+        var list = (defaults.stringArray(forKey: ignoredKey) ?? []).filter { $0 != folder }
+        if ignored { list.append(folder) }
+        defaults.set(list.sorted(), forKey: ignoredKey)
+    }
+}
+
 /// Time worked alongside AI coding tools (Claude Code, Cursor), offered on the timesheet for you to accept.
 ///
 /// The tools' hooks (`scripts/activity-hook.sh`) append one JSON line per event to `Activity/inbox.jsonl` in
@@ -11,7 +62,11 @@ import SwiftData
 ///
 /// A tool can also log a label for its work (`"type": "note", "note": "Invoice layout", "minutes": 40`). Labels
 /// are cut to three words, since they become the entry's note on invoices, and a day's labels for a project are
-/// merged into one suggestion with the measured time. Nothing reaches the timesheet until you accept it.
+/// merged into one suggestion with the measured time.
+///
+/// Your commits in linked repos count too: MyTime reads them with git every few minutes (`source: "git"`). Commits
+/// up to `commitGap` apart are one stretch of work, which starts `commitLeadIn` before its first commit. Measured
+/// and commit time are merged, so overlapping time counts once. Nothing reaches the timesheet until you accept it.
 enum ActivityTracker {
     /// Longest pause that still counts as one block of work.
     static let gap: TimeInterval = 15 * 60
@@ -21,6 +76,12 @@ enum ActivityTracker {
     static let minimumBlock: TimeInterval = 60
     /// Beats nobody accepted or dismissed are dropped after this long.
     static let keepFor: TimeInterval = 30 * 86_400
+
+    /// Commits further apart than this are separate stretches of work.
+    static let commitGap: TimeInterval = 90 * 60
+    /// Work counted before a stretch's first commit.
+    static let commitLeadIn: TimeInterval = 30 * 60
+    static let gitSource = "git"
 
     /// Longest label kept: notes appear on invoices.
     static let maxLabelWords = 3
@@ -54,6 +115,34 @@ enum ActivityTracker {
         return best?.project
     }
 
+    private static func tokens(_ text: String?) -> [String] {
+        (text ?? "").lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
+    }
+
+    /// For a folder no project links: the project it most likely belongs to. A sibling of a linked folder that
+    /// shares the start of its name ("helpdesk" beside "helpdesk-chat-bot") counts most; then the folder's name appearing
+    /// in the project's, end client's or client's name. Nil unless one project clearly wins.
+    static func guessProject(for folder: String, in projects: [Project]) -> Project? {
+        let name = tokens((folder as NSString).lastPathComponent)
+        let parent = (folder as NSString).deletingLastPathComponent
+        guard !name.isEmpty else { return nil }
+        var scored: [(project: Project, score: Int)] = []
+        for project in projects where !project.isArchived {
+            var score = 0
+            for linked in project.folders where (linked as NSString).deletingLastPathComponent == parent {
+                let other = tokens((linked as NSString).lastPathComponent)
+                let shared = zip(name, other).prefix { $0 == $1 }.count
+                if shared > 0, shared == min(name.count, other.count) { score = max(score, 10 + shared) }
+            }
+            let names = Set(tokens(project.name) + tokens(project.endClient?.name) + tokens(project.client?.name))
+            if name.allSatisfy(names.contains) { score = max(score, 5) }
+            if score > 0 { scored.append((project, score)) }
+        }
+        let best = scored.map(\.score).max() ?? 0
+        let winners = scored.filter { $0.score == best }
+        return winners.count == 1 ? winners[0].project : nil
+    }
+
     /// "~/Documents/projects/tracker"
     static func abbreviate(_ folder: String) -> String {
         (folder as NSString).abbreviatingWithTildeInPath
@@ -63,6 +152,7 @@ enum ActivityTracker {
         switch source.lowercased() {
         case "claude": "Claude Code"
         case "cursor": "Cursor"
+        case gitSource: "Git commits"
         default: source.capitalized
         }
     }
@@ -81,7 +171,8 @@ enum ActivityTracker {
 
     /// Moves new beats from the inbox into the store. Returns how many were kept.
     @MainActor @discardableResult
-    static func ingest(from directory: URL = inboxDirectory, context: ModelContext, running: [TimeEntry], now: Date = .now) -> Int {
+    static func ingest(from directory: URL = inboxDirectory, context: ModelContext, running: [TimeEntry], now: Date = .now,
+                       settings: ActivitySettings = .current) -> Int {
         let fm = FileManager.default
         let inbox = directory.appending(path: "inbox.jsonl")
         let claimed = directory.appending(path: "reading.jsonl")
@@ -117,7 +208,8 @@ enum ActivityTracker {
             let folder = normalize(line.folder)
             let source = (line.source ?? "claude").lowercased()
             let at = Date(timeIntervalSince1970: line.at)
-            guard !folder.isEmpty, at <= now.addingTimeInterval(60), now.timeIntervalSince(at) < keepFor else { continue }
+            guard !folder.isEmpty, at <= now.addingTimeInterval(60), now.timeIntervalSince(at) < keepFor,
+                  !settings.isIgnored(folder) else { continue }
             if line.type == "note" {
                 let text = label(line.note ?? "")
                 let estimate = max(0, min(line.minutes ?? 0, 24 * 60)) * 60
@@ -200,6 +292,8 @@ enum ActivityTracker {
     struct Block: Equatable {
         var start: Date
         var end: Date
+        /// Worked out from commits alone, with nothing measured in it.
+        var fromCommits = false
         var duration: TimeInterval { end.timeIntervalSince(start) }
     }
 
@@ -213,6 +307,9 @@ enum ActivityTracker {
         let blocks: [Block]
         let beats: [ActivityBeat]
         let notes: [ActivityNote]
+        /// For an unlinked folder, the project it probably belongs to.
+        var guess: Project? = nil
+        var settings = ActivitySettings.exact
 
         var id: String { "\(day.timeIntervalSince1970)|\(project.map { "\($0.persistentModelID.hashValue)" } ?? folder)" }
         var measured: TimeInterval { blocks.reduce(0) { $0 + $1.duration } }
@@ -220,13 +317,13 @@ enum ActivityTracker {
         /// Measured time wins; the tools' estimates are used only when nothing was measured.
         var isEstimate: Bool { measured == 0 && estimate > 0 }
         var duration: TimeInterval { measured > 0 ? measured : estimate }
-        /// Whole minutes, as it will be added to the timesheet.
-        var roundedDuration: TimeInterval { (duration / 60).rounded() * 60 }
+        /// Rounded as set in Settings, as it will be added to the timesheet.
+        var roundedDuration: TimeInterval { settings.rounded(duration) }
         /// The day's labels, merged: the suggested note.
         var note: String { ActivityTracker.mergeLabels(notes.map(\.text)).joined(separator: ", ") }
         var start: Date { min(blocks.first?.start ?? .distantFuture, notes.first?.at ?? .distantFuture) }
         func isOngoing(at now: Date) -> Bool {
-            guard let last = beats.last?.at else { return false }
+            guard let last = beats.last(where: { $0.source != ActivityTracker.gitSource })?.at else { return false }
             return now.timeIntervalSince(last) < ActivityTracker.gap
         }
     }
@@ -246,10 +343,37 @@ enum ActivityTracker {
         return result
     }
 
+    /// Commit times as stretches of work: commits up to `commitGap` apart join, and each stretch starts
+    /// `commitLeadIn` before its first commit (not before midnight).
+    static func commitBlocks(_ times: [Date], calendar: Calendar = .current) -> [Block] {
+        blocks(times, gap: commitGap, calendar: calendar).map { block in
+            let start = max(block.start.addingTimeInterval(-commitLeadIn), calendar.startOfDay(for: block.start))
+            return Block(start: start, end: block.end, fromCommits: true)
+        }
+    }
+
+    /// Overlapping or touching blocks merged into one.
+    static func union(_ blocks: [Block]) -> [Block] {
+        var result: [Block] = []
+        for block in blocks.sorted(by: { $0.start < $1.start }) {
+            if var last = result.last, block.start <= last.end {
+                last.end = max(last.end, block.end)
+                last.fromCommits = last.fromCommits && block.fromCommits
+                result[result.count - 1] = last
+            } else {
+                result.append(block)
+            }
+        }
+        return result
+    }
+
     /// Activity and labels grouped by day and project (or unlinked folder), earliest first. A day needs a block
-    /// of at least `minimumBlock` or a label to be offered.
+    /// of at least `minimumBlock` or a label to be offered, and at least the minimum in `settings` unless it has
+    /// a label. Ignored folders are left out.
     static func suggestions(_ beats: [ActivityBeat], notes: [ActivityNote] = [], projects: [Project],
-                            calendar: Calendar = .current) -> [Suggestion] {
+                            settings: ActivitySettings = .current, calendar: Calendar = .current) -> [Suggestion] {
+        let beats = beats.filter { !settings.isIgnored($0.folder) }
+        let notes = notes.filter { !settings.isIgnored($0.folder) }
         struct Key: Hashable { let day: Date; let group: String }
         struct Group { var project: Project?; var beats: [ActivityBeat] = []; var notes: [ActivityNote] = [] }
         var groups: [Key: Group] = [:]
@@ -269,17 +393,66 @@ enum ActivityTracker {
         return groups.compactMap { key, group -> Suggestion? in
             let beats = group.beats.sorted { $0.at < $1.at }
             let notes = group.notes.sorted { $0.at < $1.at }
-            let blocks = blocks(beats.map(\.at), calendar: calendar).filter { $0.duration >= minimumBlock }
+            let measured = blocks(beats.filter { $0.source != gitSource }.map(\.at), calendar: calendar)
+                .filter { $0.duration >= minimumBlock }
+            let commits = commitBlocks(beats.filter { $0.source == gitSource }.map(\.at), calendar: calendar)
+            let blocks = union(measured + commits)
             guard !blocks.isEmpty || !notes.isEmpty,
                   let folder = beats.first?.folder ?? notes.first?.folder else { return nil }
             var seen = Set<String>()
-            return Suggestion(
+            let suggestion = Suggestion(
                 day: key.day, folder: folder, project: group.project,
                 sources: (beats.map(\.source) + notes.map(\.source)).filter { seen.insert($0).inserted },
-                blocks: blocks, beats: beats, notes: notes
+                blocks: blocks, beats: beats, notes: notes,
+                guess: group.project == nil ? guessProject(for: folder, in: projects) : nil,
+                settings: settings
             )
+            guard !notes.isEmpty || suggestion.duration >= TimeInterval(settings.minimumMinutes * 60) else { return nil }
+            return suggestion
         }
         .sorted { ($0.day, $0.start) < ($1.day, $1.start) }
+    }
+
+    // MARK: Commits
+
+    /// UserDefaults key: per folder, the latest commit time already read.
+    static let commitMarksKey = "activityCommitMarks"
+
+    /// Folders to read commits from: every linked folder of an active project.
+    @MainActor
+    static func commitFolders(context: ModelContext, settings: ActivitySettings = .current) -> [String] {
+        let projects = (try? context.fetch(FetchDescriptor<Project>())) ?? []
+        var seen = Set<String>()
+        return projects.filter { !$0.isArchived }.flatMap(\.folders)
+            .filter { !settings.isIgnored($0) && seen.insert($0).inserted }
+    }
+
+    /// Where to read each folder's commits from: after the last one read, else from the start of today, so
+    /// linking a repo picks up today's commits but not its history.
+    @MainActor
+    static func commitMarks(for folders: [String], defaults: UserDefaults = .standard, now: Date = .now) -> [(folder: String, after: Date)] {
+        let marks = defaults.dictionary(forKey: commitMarksKey) as? [String: Double] ?? [:]
+        let today = Calendar.current.startOfDay(for: now)
+        return folders.map { ($0, marks[$0].map(Date.init(timeIntervalSince1970:)) ?? today) }
+    }
+
+    /// Adds commits as git beats, except for projects whose timer is running, and moves each folder's mark on.
+    @MainActor
+    static func ingestCommits(_ results: [(folder: String, after: Date, times: [Date])], context: ModelContext,
+                              running: [TimeEntry], defaults: UserDefaults = .standard) {
+        let projects = (try? context.fetch(FetchDescriptor<Project>())) ?? []
+        let tracked = Set(running.filter(\.isRunning).compactMap { $0.task?.project?.persistentModelID })
+        var marks = defaults.dictionary(forKey: commitMarksKey) as? [String: Double] ?? [:]
+        for result in results {
+            let times = result.times.filter { $0 > result.after }
+            let skip = project(for: result.folder, in: projects).map { tracked.contains($0.persistentModelID) } ?? false
+            if !skip {
+                for time in times { context.insert(ActivityBeat(at: time, folder: result.folder, source: gitSource)) }
+            }
+            marks[result.folder] = (times.max() ?? result.after).timeIntervalSince1970
+        }
+        defaults.set(marks, forKey: commitMarksKey)
+        try? context.save()
     }
 
     // MARK: Accept and dismiss
@@ -321,6 +494,16 @@ enum ActivityTracker {
         clear(suggestion, context: context)
     }
 
+    /// Stops tracking a folder (and everything inside it), dropping what's already been collected there.
+    @MainActor
+    static func ignore(_ folder: String, context: ModelContext, defaults: UserDefaults = .standard) {
+        ActivitySettings.setIgnored(folder, true, defaults: defaults)
+        let settings = ActivitySettings.load(defaults)
+        ((try? context.fetch(FetchDescriptor<ActivityBeat>())) ?? []).filter { settings.isIgnored($0.folder) }.forEach(context.delete)
+        ((try? context.fetch(FetchDescriptor<ActivityNote>())) ?? []).filter { settings.isIgnored($0.folder) }.forEach(context.delete)
+        try? context.save()
+    }
+
     @MainActor
     private static func clear(_ suggestion: Suggestion, context: ModelContext) {
         suggestion.beats.forEach(context.delete)
@@ -329,12 +512,16 @@ enum ActivityTracker {
     }
 }
 
-/// Reads the activity inbox every minute while MyTime runs.
+/// Reads the activity inbox every minute, and linked repos' commits every five, while MyTime runs.
 @MainActor
 final class ActivityPoller {
+    /// The running app's poller, so the Review tab can ask for fresh data.
+    static weak var current: ActivityPoller?
     private let context: ModelContext
     private let timer: TimerService
     private var ticker: Timer?
+    private var ticks = 0
+    private var scanning = false
 
     init(context: ModelContext, timer: TimerService) {
         self.context = context
@@ -342,13 +529,65 @@ final class ActivityPoller {
     }
 
     func start() {
-        poll()
+        Self.current = self
+        poll(includingCommits: true)
         ticker = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.poll() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.ticks += 1
+                self.poll(includingCommits: self.ticks % 5 == 0)
+            }
         }
     }
 
-    func poll() {
+    func poll(includingCommits: Bool) {
         ActivityTracker.ingest(context: context, running: timer.activeEntries)
+        if includingCommits { scanCommits() }
+    }
+
+    private func scanCommits() {
+        guard !scanning else { return }
+        let jobs = ActivityTracker.commitMarks(for: ActivityTracker.commitFolders(context: context))
+        guard !jobs.isEmpty else { return }
+        scanning = true
+        Task.detached(priority: .utility) { [weak self] in
+            let results = jobs.map { (folder: $0.folder, after: $0.after, times: GitLog.commitTimes(in: $0.folder, after: $0.after)) }
+            await self?.finishScan(results)
+        }
+    }
+
+    private func finishScan(_ results: [(folder: String, after: Date, times: [Date])]) {
+        scanning = false
+        ActivityTracker.ingestCommits(results, context: context, running: timer.activeEntries)
+    }
+}
+
+/// Reads your own commit times from a repository.
+enum GitLog {
+    /// Commit times (committer date) after `after`, on any branch, by the repo's configured user.
+    nonisolated static func commitTimes(in folder: String, after: Date) -> [Date] {
+        guard let email = run(["-C", folder, "config", "user.email"])?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return [] }
+        // A day's slack on --since; the exact cut is made on the parsed times.
+        let since = ISO8601DateFormatter().string(from: after.addingTimeInterval(-86_400))
+        guard let output = run(["-C", folder, "log", "--all", "--no-merges", "--since=\(since)",
+                                "--author=\(email)", "--format=%ct"]) else { return [] }
+        return output.split(separator: "\n").compactMap { Double($0).map(Date.init(timeIntervalSince1970:)) }
+            .filter { $0 > after }
+    }
+
+    nonisolated private static func run(_ arguments: [String]) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = arguments
+        process.environment = ["GIT_TERMINAL_PROMPT": "0", "HOME": NSHomeDirectory(), "PATH": "/usr/bin:/bin"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 }

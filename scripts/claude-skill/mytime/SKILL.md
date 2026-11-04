@@ -6,7 +6,8 @@ argument-hint: "[label] [minutes]"
 
 # Log work to MyTime
 
-MyTime already measures how long Claude Code works in each repo, through hooks. You add the **label**: a
+MyTime already measures how long Claude Code works in each repo, through hooks, and reads the user's commits in
+linked repos. You add the **label**: a
 1–3 word name for the work, which becomes the time entry's note and **appears on the client's invoice**.
 MyTime merges a day's labels for a project into one suggestion. The user reviews it in MyTime › Review before
 anything reaches the timesheet.
@@ -39,8 +40,8 @@ anything reaches the timesheet.
 
 4. **Only add minutes when MyTime couldn't measure the time.** Examples: the work happened outside Claude Code,
    such as in a meeting or claude.ai chat, or the user tells you how long it took. Then pass a whole number of
-   minutes as the third argument, e.g. `log "Planning call" 30`. Don't guess this session's length: you can't
-   see a clock, and MyTime's measurement is better.
+   minutes as the third argument, e.g. `log "Planning call" 30`. Don't guess this session's length, or time from
+   commits: you can't see a clock, and MyTime measures both.
 5. **Tell the user in one line** what you logged, and that it's waiting in MyTime › Review.
 
 If the command says it couldn't write to the inbox, or the script is missing, MyTime isn't installed on this

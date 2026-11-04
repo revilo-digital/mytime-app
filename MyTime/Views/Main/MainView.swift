@@ -16,6 +16,9 @@ struct MainView: View {
     @Query private var beats: [ActivityBeat]
     @Query private var notes: [ActivityNote]
     @Query private var projects: [Project]
+    // Read so a change in Settings redraws the suggestions.
+    @AppStorage(ActivitySettings.roundingKey) private var rounding = ActivitySettings.defaultRoundingMinutes
+    @AppStorage(ActivitySettings.minimumKey) private var minimum = ActivitySettings.defaultMinimumMinutes
 
     private var reviewCount: Int {
         ActivityTracker.suggestions(beats, notes: notes, projects: projects).count
