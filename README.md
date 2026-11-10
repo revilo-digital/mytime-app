@@ -17,11 +17,16 @@ never leaves your machine unless you back it up to iCloud Drive yourself.
   - Pause as well as stop. Paused timers wait in a list so you can switch between tasks; switching pauses the
     running timer. Starting a task you've already tracked today, paused or stopped, carries on that entry
     instead of adding another at zero.
+  - Run several timers at once: the "+" on a task row, or "Run another timer alongside", starts one without
+    stopping the others. Each records its full time, and the menu bar shows every running time.
+  - Time away from the Mac: after no input for a while (15 minutes by default), or when the Mac sleeps or
+    locks, MyTime asks when you're back whether to keep or remove that time. Timers still running at midnight
+    stop at the moment you left.
   - Star tasks (in the popover or on a client's project cards) for one-click starts. The last three other tasks
     you tracked show underneath.
   - Edit, add or delete today's entries without opening the main window.
-  - Global shortcuts: <kbd>⌥⌘T</kbd> opens the timer and <kbd>⌥⌘S</kbd> starts or stops the last task.
-  - A running timer survives quitting, sleep, crashes and reboots. Only the start timestamp is stored, and
+  - Global shortcuts: <kbd>⌥⌘T</kbd> opens the timer and <kbd>⌥⌘S</kbd> starts the last task, or stops every running timer.
+  - Running timers survive quitting, sleep, crashes and reboots. Only the start timestamp is stored, and
     elapsed time is always worked out from it.
 - **Timesheet**
   - Day and week views, click-to-edit entries, and totals for today, the week, billable time and uninvoiced time.
