@@ -167,6 +167,9 @@ enum ActivityTracker {
         let type: String?
         let note: String?
         let minutes: Double?
+        /// The session's title, sent when Claude Code finishes a turn.
+        let title: String?
+        let session: String?
     }
 
     /// Moves new beats from the inbox into the store. Returns how many were kept.
@@ -197,10 +200,10 @@ enum ActivityTracker {
         let tracked = Set(running.filter(\.isRunning).compactMap { $0.task?.project?.persistentModelID })
         let earliest = Date(timeIntervalSince1970: lines.map(\.at).min() ?? 0).addingTimeInterval(-dedupeWindow)
         let recent = (try? context.fetch(FetchDescriptor<ActivityBeat>(predicate: #Predicate { $0.at >= earliest }))) ?? []
-        var last: [String: Date] = [:]
+        var last: [String: ActivityBeat] = [:]
         for beat in recent {
             let key = beat.source + "|" + beat.folder
-            last[key] = max(last[key] ?? .distantPast, beat.at)
+            if beat.at >= last[key]?.at ?? .distantPast { last[key] = beat }
         }
 
         var kept = 0
@@ -220,9 +223,18 @@ enum ActivityTracker {
             }
             if let project = project(for: folder, in: projects), tracked.contains(project.persistentModelID) { continue }
             let key = source + "|" + folder
-            if let previous = last[key], abs(at.timeIntervalSince(previous)) < dedupeWindow { continue }
-            last[key] = at
-            context.insert(ActivityBeat(at: at, folder: folder, source: source))
+            let title = (line.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if let previous = last[key], abs(at.timeIntervalSince(previous.at)) < dedupeWindow {
+                // A title arriving just after another beat still counts: it goes on that beat.
+                if !title.isEmpty {
+                    previous.detail = title
+                    previous.session = line.session ?? ""
+                }
+                continue
+            }
+            let beat = ActivityBeat(at: at, folder: folder, source: source, detail: title, session: line.session ?? "")
+            context.insert(beat)
+            last[key] = beat
             kept += 1
         }
         try? context.save()
@@ -322,10 +334,30 @@ enum ActivityTracker {
         /// The day's labels, merged: the suggested note.
         var note: String { ActivityTracker.mergeLabels(notes.map(\.text)).joined(separator: ", ") }
         var start: Date { min(blocks.first?.start ?? .distantFuture, notes.first?.at ?? .distantFuture) }
+        /// What was worked on, in order: each session's latest title, then commit subjects, without repeats.
+        var worked: [String] { ActivityTracker.worked(beats) }
         func isOngoing(at now: Date) -> Bool {
             guard let last = beats.last(where: { $0.source != ActivityTracker.gitSource })?.at else { return false }
             return now.timeIntervalSince(last) < ActivityTracker.gap
         }
+    }
+
+    /// Session titles (the latest for each session), then commit subjects, in the order they were first seen,
+    /// without repeats.
+    static func worked(_ beats: [ActivityBeat]) -> [String] {
+        var titles: [String: (first: Date, latest: ActivityBeat)] = [:]
+        for beat in beats where beat.source != gitSource && !beat.detail.isEmpty {
+            let key = beat.session.isEmpty ? beat.detail : beat.session
+            if let current = titles[key] {
+                titles[key] = (min(current.first, beat.at), beat.at >= current.latest.at ? beat : current.latest)
+            } else {
+                titles[key] = (beat.at, beat)
+            }
+        }
+        let sessions = titles.values.sorted { $0.first < $1.first }.map(\.latest.detail)
+        let commits = beats.filter { $0.source == gitSource && !$0.detail.isEmpty }.sorted { $0.at < $1.at }.map(\.detail)
+        var seen = Set<String>()
+        return (sessions + commits).filter { seen.insert($0.lowercased()).inserted }
     }
 
     /// Sorted times split into blocks wherever the pause is longer than `gap` or the day changes.
@@ -438,18 +470,20 @@ enum ActivityTracker {
 
     /// Adds commits as git beats, except for projects whose timer is running, and moves each folder's mark on.
     @MainActor
-    static func ingestCommits(_ results: [(folder: String, after: Date, times: [Date])], context: ModelContext,
+    static func ingestCommits(_ results: [(folder: String, after: Date, commits: [GitLog.Commit])], context: ModelContext,
                               running: [TimeEntry], defaults: UserDefaults = .standard) {
         let projects = (try? context.fetch(FetchDescriptor<Project>())) ?? []
         let tracked = Set(running.filter(\.isRunning).compactMap { $0.task?.project?.persistentModelID })
         var marks = defaults.dictionary(forKey: commitMarksKey) as? [String: Double] ?? [:]
         for result in results {
-            let times = result.times.filter { $0 > result.after }
+            let commits = result.commits.filter { $0.at > result.after }
             let skip = project(for: result.folder, in: projects).map { tracked.contains($0.persistentModelID) } ?? false
             if !skip {
-                for time in times { context.insert(ActivityBeat(at: time, folder: result.folder, source: gitSource)) }
+                for commit in commits {
+                    context.insert(ActivityBeat(at: commit.at, folder: result.folder, source: gitSource, detail: commit.subject))
+                }
             }
-            marks[result.folder] = (times.max() ?? result.after).timeIntervalSince1970
+            marks[result.folder] = (commits.map(\.at).max() ?? result.after).timeIntervalSince1970
         }
         defaults.set(marks, forKey: commitMarksKey)
         try? context.save()
@@ -463,9 +497,24 @@ enum ActivityTracker {
     @MainActor @discardableResult
     static func accept(_ suggestion: Suggestion, task: TaskType, duration: TimeInterval? = nil, note: String? = nil,
                        remember: Bool, context: ModelContext) -> TimeEntry {
-        let duration = max(0, duration ?? suggestion.roundedDuration)
-        let note = note ?? suggestion.note
-        let day = suggestion.day
+        let entry = addTime(to: task, day: suggestion.day, duration: duration ?? suggestion.roundedDuration,
+                            note: note ?? suggestion.note, context: context)
+        if remember, let project = task.project {
+            if suggestion.project == nil { project.folders.append(suggestion.folder) }
+            if suggestion.project == nil || suggestion.project?.persistentModelID == project.persistentModelID {
+                project.activityTaskID = task.uuid
+            }
+        }
+        clear(suggestion, context: context)
+        return entry
+    }
+
+    /// Adds time and a note to `task` on `day`, onto that day's existing unlocked entry for the task if there
+    /// is one, so a day's work on a task stays one record.
+    @MainActor @discardableResult
+    static func addTime(to task: TaskType, day: Date, duration: TimeInterval, note: String,
+                        context: ModelContext) -> TimeEntry {
+        let duration = max(0, duration)
         let existing = ((try? context.fetch(FetchDescriptor<TimeEntry>(predicate: #Predicate { $0.date == day }))) ?? [])
             .filter { !$0.isLocked && $0.task?.persistentModelID == task.persistentModelID }
             .sorted { $0.createdAt > $1.createdAt }
@@ -479,13 +528,6 @@ enum ActivityTracker {
             entry = TimeEntry(task: task, date: day, durationSeconds: duration, note: mergeNote("", adding: note))
             context.insert(entry)
         }
-        if remember, let project = task.project {
-            if suggestion.project == nil { project.folders.append(suggestion.folder) }
-            if suggestion.project == nil || suggestion.project?.persistentModelID == project.persistentModelID {
-                project.activityTaskID = task.uuid
-            }
-        }
-        clear(suggestion, context: context)
         return entry
     }
 
@@ -512,7 +554,7 @@ enum ActivityTracker {
     }
 }
 
-/// Reads the activity inbox every minute, and linked repos' commits every five, while MyTime runs.
+/// Reads the activity inbox and your calendars every minute, and linked repos' commits every five, while MyTime runs.
 @MainActor
 final class ActivityPoller {
     /// The running app's poller, so the Review tab can ask for fresh data.
@@ -543,6 +585,7 @@ final class ActivityPoller {
     func poll(includingCommits: Bool) {
         ActivityTracker.ingest(context: context, running: timer.activeEntries)
         if includingCommits { scanCommits() }
+        CalendarStore.shared.refresh()
     }
 
     private func scanCommits() {
@@ -551,29 +594,40 @@ final class ActivityPoller {
         guard !jobs.isEmpty else { return }
         scanning = true
         Task.detached(priority: .utility) { [weak self] in
-            let results = jobs.map { (folder: $0.folder, after: $0.after, times: GitLog.commitTimes(in: $0.folder, after: $0.after)) }
+            let results = jobs.map { (folder: $0.folder, after: $0.after, commits: GitLog.commits(in: $0.folder, after: $0.after)) }
             await self?.finishScan(results)
         }
     }
 
-    private func finishScan(_ results: [(folder: String, after: Date, times: [Date])]) {
+    private func finishScan(_ results: [(folder: String, after: Date, commits: [GitLog.Commit])]) {
         scanning = false
         ActivityTracker.ingestCommits(results, context: context, running: timer.activeEntries)
     }
 }
 
-/// Reads your own commit times from a repository.
+/// Reads your own commits from a repository.
 enum GitLog {
-    /// Commit times (committer date) after `after`, on any branch, by the repo's configured user.
-    nonisolated static func commitTimes(in folder: String, after: Date) -> [Date] {
+    struct Commit: Equatable, Sendable {
+        /// Committer date.
+        let at: Date
+        /// The message's first line.
+        let subject: String
+    }
+
+    /// Commits (by committer date) after `after`, on any branch, by the repo's configured user.
+    nonisolated static func commits(in folder: String, after: Date) -> [Commit] {
         guard let email = run(["-C", folder, "config", "user.email"])?.trimmingCharacters(in: .whitespacesAndNewlines),
               !email.isEmpty else { return [] }
         // A day's slack on --since; the exact cut is made on the parsed times.
         let since = ISO8601DateFormatter().string(from: after.addingTimeInterval(-86_400))
         guard let output = run(["-C", folder, "log", "--all", "--no-merges", "--since=\(since)",
-                                "--author=\(email)", "--format=%ct"]) else { return [] }
-        return output.split(separator: "\n").compactMap { Double($0).map(Date.init(timeIntervalSince1970:)) }
-            .filter { $0 > after }
+                                "--author=\(email)", "--format=%ct%x09%s"]) else { return [] }
+        return output.split(separator: "\n").compactMap { line -> Commit? in
+            let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+            guard let seconds = Double(parts[0]) else { return nil }
+            return Commit(at: Date(timeIntervalSince1970: seconds), subject: parts.count > 1 ? String(parts[1]) : "")
+        }
+        .filter { $0.at > after }
     }
 
     nonisolated private static func run(_ arguments: [String]) -> String? {

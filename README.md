@@ -38,8 +38,12 @@ never leaves your machine unless you back it up to iCloud Drive yourself.
     labels merge.
   - Ask Claude to "log this to MyTime" (`/mytime`) and it adds a 1–3 word label from the session or today's
     commits, which becomes the invoice note.
+  - Each card shows what you worked on (session titles and commit messages). With Apple Intelligence on, an
+    empty note is filled from them in 1–3 words, on the Mac.
   - Unlinked folders beside a linked one with a similar name are matched to its project. The task defaults to
     the one you chose or last tracked, and favourite and recent tasks are one click away.
+  - Meetings from your calendars can show up in Review too, matched to projects by series, calendar or who's
+    invited.
 - **Real time, not decimals**
   - Everything is shown as `h:mm`. Money is calculated from exact whole minutes, so 0:41 at $150/h is $102.50.
     Nothing is rounded to 0.68 h first.
@@ -102,7 +106,7 @@ xcodebuild test -project MyTime.xcodeproj -scheme MyTime -destination 'platform=
 ```
 
 The tests use Swift Testing with an in-memory store. They cover the timer (including crash recovery), rate
-resolution, invoice building and totals, PDF layout, backups and restore, the task-template tools, and AI activity suggestions.
+resolution, invoice building and totals, PDF layout, backups and restore, the task-template tools, AI activity suggestions, and meeting matching.
 
 ## First run
 
@@ -139,11 +143,32 @@ folder" the first time you add a suggestion from it.
   commit. Overlap with measured time counts once.
 - A folder that isn't linked but sits beside a linked one with a similar name (`helpdesk` beside
   `helpdesk-chat-bot`) is suggested for that project.
+- Each card shows what you worked on: the session titles (sent by the Stop hook) and your commit messages. When a
+  card has no label, MyTime asks Apple's on-device model (Apple Intelligence, macOS 26) to name the work in 1–3
+  words. Nothing leaves the Mac, and you can change the note before adding it.
 - Settings › **AI Activity** sets rounding (up to 5 minutes by default), hides suggestions under a minimum
   (5 minutes, unless labelled), and lists folders you've ignored from a card's Dismiss menu.
 
 Any other tool can call the same script with its own source name (e.g. `activity-hook.sh cursor`) from the
 project folder, or with `CLAUDE_PROJECT_DIR` set to it.
+
+## Calendar meetings
+
+Turn on **Settings › Calendars** to have meetings show up in Review beside AI activity. MyTime reads every calendar
+on the Mac through macOS (EventKit), so iCloud, Google, Outlook/Exchange and CalDAV accounts all work. Untick
+calendars you don't want, such as personal ones.
+
+- A meeting is offered once it starts, at its scheduled length, rounded like AI activity. All-day, declined,
+  cancelled and "free" events are left out, and the same invite on two of your calendars shows once.
+- Turning meetings on picks them up from the start of the current week, not your whole history.
+- A meeting is matched to a project by its recurring series, then by its calendar, then by who's invited.
+  Invitees count by their company domain (`acme.com`), or by full address on public mail services. With no link,
+  a client whose email domain matches an invitee, or a project named in the title, is suggested.
+- Tick **Always for people at acme.com** when adding a meeting to save that link. Links are listed under
+  Projects › edit › **Meetings**, which also sets the task meetings go on.
+- A card flags time that overlaps the day's AI activity, so it isn't counted twice.
+
+Only meetings you've added or dismissed are stored. Calendars are never changed.
 
 ## Where your data lives
 

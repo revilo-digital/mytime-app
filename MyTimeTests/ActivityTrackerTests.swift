@@ -233,12 +233,15 @@ struct ActivityTrackerTests {
 
         let timer = TimerService(context: context, defaults: .tests)
         let running = timer.start(task: development, now: nine)
+        let commits = [GitLog.Commit(at: nine.addingTimeInterval(-120), subject: "Old"),
+                       GitLog.Commit(at: nine.addingTimeInterval(60), subject: "Invoice: align GST")]
         ActivityTracker.ingestCommits([
-            (website, nine.addingTimeInterval(-60), [nine.addingTimeInterval(-120), nine.addingTimeInterval(60)]),
-            (other, nine.addingTimeInterval(-60), [nine.addingTimeInterval(-120), nine.addingTimeInterval(60)]),
+            (website, nine.addingTimeInterval(-60), commits),
+            (other, nine.addingTimeInterval(-60), commits),
         ], context: context, running: [running], defaults: defaults)
         // Website's timer is running, so its commit is already counted; the older commit is before the mark.
         #expect(try beats().map(\.folder) == [other])
+        #expect(try beats().map(\.detail) == ["Invoice: align GST"])
         let after = ActivityTracker.commitMarks(for: [website, other], defaults: defaults, now: nine)
         #expect(after.allSatisfy { $0.after == nine.addingTimeInterval(60) })
     }
@@ -266,9 +269,38 @@ struct ActivityTrackerTests {
         try git("commit", "-q", "--allow-empty", "-m", "two", date: "@1790003600 +0000")
         try git("-c", "user.email=someone@else.com", "commit", "-q", "--allow-empty", "-m", "theirs", date: "@1790005000 +0000")
 
-        let times = GitLog.commitTimes(in: repo, after: Date(timeIntervalSince1970: 1_790_000_000))
-        #expect(times == [Date(timeIntervalSince1970: 1_790_003_600)])
-        #expect(GitLog.commitTimes(in: "/nonexistent", after: .distantPast).isEmpty)
+        let commits = GitLog.commits(in: repo, after: Date(timeIntervalSince1970: 1_790_000_000))
+        #expect(commits == [GitLog.Commit(at: Date(timeIntervalSince1970: 1_790_003_600), subject: "two")])
+        #expect(GitLog.commits(in: "/nonexistent", after: .distantPast).isEmpty)
+    }
+
+    @Test func stopBeatsCarryTheSessionTitleEvenWhenDeduped() throws {
+        let titled = { (minutes: Double, title: String, session: String) in
+            "{\"at\":\(nine.addingTimeInterval(minutes * 60).timeIntervalSince1970),\"folder\":\"/Users/me/code/website\","
+                + "\"source\":\"claude\",\"title\":\"\(title)\",\"session\":\"\(session)\"}"
+        }
+        // The Stop beat lands 20 seconds after a tool beat, so it's deduped, but its title goes on that beat.
+        try write([line(0), titled(0.33, "Invoice PDF layout", "a"), line(5), titled(10, "Invoice page breaks", "a"),
+                   titled(12, "Login fixes", "b")])
+        ActivityTracker.ingest(from: inbox, context: context, running: [], now: nine.addingTimeInterval(3600))
+        let all = try beats()
+        #expect(all.count == 4)
+        #expect(all[0].detail == "Invoice PDF layout" && all[0].session == "a")
+        context.insert(ActivityBeat(at: nine.addingTimeInterval(1200), folder: "/Users/me/code/website", source: "git",
+                                    detail: "Invoice: paginate long lists"))
+        context.insert(ActivityBeat(at: nine.addingTimeInterval(1300), folder: "/Users/me/code/website", source: "git",
+                                    detail: "login fixes"))
+        let s = try #require(ActivityTracker.suggestions(try beats(), projects: [project], settings: .exact).first)
+        // Session a was renamed, so only its latest title shows; a commit repeating a title is left out.
+        #expect(s.worked == ["Invoice page breaks", "Login fixes", "Invoice: paginate long lists"])
+    }
+
+    @Test func writtenNotesAreTidiedToThreeWords() {
+        #expect(NoteWriter.clean("Invoice layout") == "Invoice layout")
+        #expect(NoteWriter.clean("\"Invoice layout.\"") == "Invoice layout")
+        #expect(NoteWriter.clean("Note: **stripe checkout**\nBecause the commits…") == "Stripe checkout")
+        #expect(NoteWriter.clean("Review tab and commit counting") == "Review tab and")
+        #expect(NoteWriter.clean("  \n") == nil)
     }
 
     @Test func unlinkedSiblingFoldersGuessTheirProject() {

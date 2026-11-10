@@ -25,6 +25,11 @@ final class Project {
     var activityFoldersRaw: String = ""
     /// The task that activity in those folders is suggested on.
     var activityTaskID: UUID?
+    /// What links calendar meetings to this project, one per line: "calendar:<id>", "series:<id>" or
+    /// "people:<domain or address>". Use `meetingLinks`.
+    var meetingLinksRaw: String = ""
+    /// The task meetings are suggested on.
+    var meetingTaskID: UUID?
 
     @Relationship(deleteRule: .cascade, inverse: \TaskType.project)
     var tasks: [TaskType] = []
@@ -69,6 +74,21 @@ extension Project {
     var activityTask: TaskType? {
         guard let activityTaskID else { return nil }
         return tasks.first { $0.uuid == activityTaskID && $0.isSelectable }
+    }
+
+    var meetingLinks: [String] {
+        get { meetingLinksRaw.split(separator: "\n").map(String.init).filter { !$0.isEmpty } }
+        set {
+            var seen = Set<String>()
+            meetingLinksRaw = newValue.filter { !$0.isEmpty && seen.insert($0).inserted }.joined(separator: "\n")
+        }
+    }
+
+    /// The task to suggest meetings on: the chosen one, else one named "Meetings", else the activity task.
+    var suggestedMeetingTask: TaskType? {
+        let usable = tasks.filter(\.isSelectable)
+        if let meetingTaskID, let task = usable.first(where: { $0.uuid == meetingTaskID }) { return task }
+        return usable.first { $0.name.localizedCaseInsensitiveContains("meeting") } ?? suggestedTask
     }
 
     /// The task to suggest activity on: the chosen one, else the one last tracked here, else one named

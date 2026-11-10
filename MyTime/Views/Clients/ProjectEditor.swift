@@ -104,6 +104,7 @@ struct ProjectEditor: View {
                 }
 
                 activitySection
+                meetingSection
             }
             .formStyle(.grouped)
 
@@ -172,6 +173,57 @@ struct ProjectEditor: View {
         } footer: {
             Text("Time Claude Code or Cursor spends working in these folders (or inside them) is suggested on your timesheet to add.")
                 .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @AppStorage(MeetingSettings.enabledKey) private var meetingsEnabled = false
+
+    @ViewBuilder
+    private var meetingSection: some View {
+        if meetingsEnabled || !project.meetingLinks.isEmpty {
+            let calendars = Dictionary(CalendarStore.shared.calendars.map { ($0.id, $0.title) }, uniquingKeysWith: { a, _ in a })
+            Section {
+                if project.meetingLinks.isEmpty {
+                    Text("None yet").foregroundStyle(.secondary)
+                }
+                ForEach(project.meetingLinks, id: \.self) { link in
+                    HStack {
+                        Image(systemName: MeetingTracker.split(link).kind == "calendar" ? "calendar" : "person.2")
+                            .foregroundStyle(.secondary)
+                        Text(linkTitle(link, calendars: calendars)).lineLimit(1)
+                        Spacer()
+                        Button {
+                            project.meetingLinks.removeAll { $0 == link }
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Stop suggesting these meetings on this project")
+                    }
+                }
+                Picker("Suggest meetings on", selection: $project.meetingTaskID) {
+                    Text("A task named Meetings, if any").tag(UUID?.none)
+                    ForEach(tasks.filter(\.isSelectable)) { Text($0.name).tag(Optional($0.uuid)) }
+                }
+            } header: {
+                Text("Meetings")
+            } footer: {
+                Text("Calendar meetings matching these are suggested on this project in Review. Tick \"Always for…\" "
+                     + "when adding a meeting to link more, or link a whole calendar in Settings › Calendars.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func linkTitle(_ link: String, calendars: [String: String]) -> String {
+        let (kind, value) = MeetingTracker.split(link)
+        switch kind {
+        case "people": return value.contains("@") ? value : "Anyone at \(value)"
+        case "calendar": return "Everything on \(calendars[value].map { "the \($0) calendar" } ?? "a calendar not on this Mac")"
+        case "series":
+            let title = CalendarStore.shared.events.first { $0.seriesID == value }?.title
+            return title.map { "Recurring: \($0)" } ?? "A recurring meeting"
+        default: return link
         }
     }
 

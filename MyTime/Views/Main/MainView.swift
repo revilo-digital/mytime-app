@@ -20,8 +20,13 @@ struct MainView: View {
     @AppStorage(ActivitySettings.roundingKey) private var rounding = ActivitySettings.defaultRoundingMinutes
     @AppStorage(ActivitySettings.minimumKey) private var minimum = ActivitySettings.defaultMinimumMinutes
 
+    @Query private var handled: [HandledMeeting]
+    @AppStorage(MeetingSettings.enabledKey) private var meetingsEnabled = false
+    private let calendars = CalendarStore.shared
+
     private var reviewCount: Int {
         ActivityTracker.suggestions(beats, notes: notes, projects: projects).count
+            + MeetingTracker.suggestions(calendars.events, handled: Set(handled.map(\.key)), projects: projects).count
     }
 
     var body: some View {

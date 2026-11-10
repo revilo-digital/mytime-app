@@ -20,6 +20,9 @@ struct SettingsView: View {
             Tab("AI Activity", systemImage: "sparkles") {
                 ActivitySettingsView()
             }
+            Tab("Calendars", systemImage: "calendar") {
+                CalendarSettingsView()
+            }
             Tab("Backup", systemImage: "externaldrive.badge.icloud") {
                 BackupSettingsView()
             }

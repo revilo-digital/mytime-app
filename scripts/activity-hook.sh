@@ -8,7 +8,8 @@
 #
 # source: claude (default), cursor, … The folder is $CLAUDE_PROJECT_DIR, else the working folder, resolved to its
 # repository's main checkout so worktrees count towards the same project. Beats print nothing and never fail,
-# so they can't get in the tool's way; `log` confirms what it logged.
+# so they can't get in the tool's way; `log` confirms what it logged. On Claude Code's Stop hook, a beat also carries
+# the session's title.
 
 json_escape() {
   local s=${1//\\/\\\\}
@@ -53,8 +54,24 @@ if [[ $1 == log ]]; then
   exit 0
 fi
 
+# The value of a top-level string field in the hook's JSON, e.g. json_field transcript_path.
+json_field() {
+  print -r -- "$input" | grep -o "\"$1\" *: *\"[^\"]*\"" | head -1 | sed -E 's/^"[^"]*" *: *"//; s/"$//'
+}
+
 {
-  cat >/dev/null 2>&1 # The hook's JSON on stdin isn't needed.
-  append "{\"at\":$(date +%s),\"folder\":\"$(json_escape "$(project_folder)")\",\"source\":\"$(json_escape "${1:-claude}")\"}"
+  input=$(cat 2>/dev/null)
+  extra=""
+  # When Claude finishes a turn, send the session's title ("Invoice PDF layout"), so MyTime can show what you
+  # worked on and suggest a note from it.
+  if [[ $input =~ '"hook_event_name" *: *"Stop"' ]]; then
+    transcript=$(json_field transcript_path)
+    session=$(json_field session_id)
+    if [[ -r $transcript ]]; then
+      title=$(grep -o '"customTitle":"[^"]*"' "$transcript" | tail -1 | sed -E 's/^"customTitle":"//; s/"$//')
+      [[ -n $title ]] && extra=",\"title\":\"$(json_escape "$title")\",\"session\":\"$(json_escape "$session")\""
+    fi
+  fi
+  append "{\"at\":$(date +%s),\"folder\":\"$(json_escape "$(project_folder)")\",\"source\":\"$(json_escape "${1:-claude}")\"$extra}"
 } >/dev/null 2>&1
 exit 0

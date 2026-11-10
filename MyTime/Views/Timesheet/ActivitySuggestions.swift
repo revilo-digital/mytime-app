@@ -21,32 +21,43 @@ struct ReviewView: View {
         return favourites + QuickStart.recents(entries: entries, excluding: favourites)
     }
 
-    private var suggestions: [ActivityTracker.Suggestion] {
-        ActivityTracker.suggestions(beats, notes: notes, projects: projects).reversed()
-    }
+    @Query private var handled: [HandledMeeting]
+    @AppStorage(MeetingSettings.enabledKey) private var meetingsEnabled = false
+    private let calendars = CalendarStore.shared
 
-    private var days: [Date] {
-        var seen = Set<Date>()
-        return suggestions.map(\.day).filter { seen.insert($0).inserted }
+    /// AI activity and meetings, latest day first and in time order within a day.
+    private func items(now: Date) -> [ReviewItem] {
+        let activity = ActivityTracker.suggestions(beats, notes: notes, projects: projects)
+        let meetings = MeetingTracker.withOverlap(
+            MeetingTracker.suggestions(calendars.events, handled: Set(handled.map(\.key)), projects: projects, now: now),
+            activity: activity)
+        return ReviewItem.merge(activity: activity, meetings: meetings)
     }
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 15)) { context in
-            let suggestions = suggestions
+            let items = items(now: context.date)
+            let days = ReviewItem.days(items)
             let quickTasks = quickTasks
-            if suggestions.isEmpty {
+            if items.isEmpty {
                 ContentUnavailableView {
                     Label("Nothing to review", systemImage: "sparkles")
                 } description: {
                     Text("Time Claude Code spends working in your repos shows up here, with any labels you ask it to log "
-                         + "(\"log this to MyTime\"). Add it to a task, or dismiss it.")
+                         + "(\"log this to MyTime\")"
+                         + (meetingsEnabled ? ", and meetings from your calendars" : "")
+                         + ". Add it to a task, or dismiss it.")
+                } actions: {
+                    if !meetingsEnabled {
+                        SettingsLink { Text("Add Meetings from Calendars…") }
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(days, id: \.self) { day in
-                            let forDay = suggestions.filter { $0.day == day }
+                            let forDay = items.filter { $0.day == day }
                             HStack(alignment: .firstTextBaseline) {
                                 Text(day.formatted(.dateTime.weekday(.wide).day().month(.wide)))
                                     .font(.headline)
@@ -58,8 +69,14 @@ struct ReviewView: View {
                             }
                             .padding(.horizontal, 4)
                             .padding(.top, day == days.first ? 0 : 10)
-                            ForEach(forDay) { suggestion in
-                                ActivitySuggestionRow(suggestion: suggestion, timer: timer, now: context.date, quickTasks: quickTasks)
+                            ForEach(forDay) { item in
+                                switch item {
+                                case .activity(let suggestion):
+                                    ActivitySuggestionRow(suggestion: suggestion, timer: timer, now: context.date, quickTasks: quickTasks)
+                                case .meeting(let suggestion):
+                                    MeetingSuggestionRow(suggestion: suggestion, timer: timer, now: context.date,
+                                                         quickTasks: quickTasks, calendars: calendars.calendars)
+                                }
                             }
                         }
                     }
@@ -76,6 +93,7 @@ struct ReviewView: View {
             } else {
                 ActivityTracker.ingest(context: modelContext, running: timer.activeEntries)
             }
+            calendars.refresh()
         }
     }
 
@@ -85,13 +103,22 @@ struct ReviewView: View {
 /// "1:20 of AI activity to review" on a timesheet day, linking to the Review tab.
 struct ActivityReviewBanner: View {
     let suggestions: [ActivityTracker.Suggestion]
+    var meetings: [MeetingTracker.Suggestion] = []
     @AppStorage("mainSection") private var section: MainSection = .timesheet
 
+    private var what: String {
+        switch (suggestions.isEmpty, meetings.isEmpty) {
+        case (false, false): "AI activity and meetings"
+        case (true, false): "meetings"
+        default: "AI activity"
+        }
+    }
+
     var body: some View {
-        if !suggestions.isEmpty {
+        if !suggestions.isEmpty || !meetings.isEmpty {
             HStack(spacing: 10) {
-                Image(systemName: "sparkles").foregroundStyle(.purple)
-                Text("\(DurationFormat.short(suggestions.reduce(0) { $0 + $1.roundedDuration })) of AI activity to review")
+                Image(systemName: suggestions.isEmpty ? "calendar" : "sparkles").foregroundStyle(.purple)
+                Text("\(DurationFormat.short(suggestions.reduce(0) { $0 + $1.roundedDuration } + meetings.reduce(0) { $0 + $1.roundedDuration })) of \(what) to review")
                     .monospacedDigit()
                 Spacer()
                 Button("Review") { section = .review }
@@ -101,6 +128,35 @@ struct ActivityReviewBanner: View {
             .card(padding: 12, cornerRadius: 12, tint: .purple, highlighted: true)
             .padding(.horizontal, 24)
             .padding(.bottom, 12)
+        }
+    }
+}
+
+/// Favourite and recent tasks as one-click choices on a suggestion card.
+struct QuickTaskChips: View {
+    let tasks: [TaskType]
+    @Binding var selection: TaskType?
+    var tint: Color
+
+    var body: some View {
+        if !tasks.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(tasks) { quick in
+                        let selected = quick.persistentModelID == selection?.persistentModelID
+                        Button { selection = quick } label: {
+                            HStack(spacing: 6) {
+                                Avatar(name: quick.project?.client?.name ?? "?", size: 16, imageData: quick.project?.client?.logoData)
+                                Text(quick.shortPath).lineLimit(1)
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(selected ? tint : nil)
+                        .controlSize(.small)
+                        .help(quick.path)
+                    }
+                }
+            }
         }
     }
 }
@@ -118,6 +174,9 @@ private struct ActivitySuggestionRow: View {
     @State private var note: String
     /// Set once you edit the duration, so a growing in-progress suggestion doesn't overwrite your number.
     @State private var editedDuration = false
+    /// The note Apple Intelligence wrote from what was worked on, while you haven't changed it.
+    @State private var writtenNote: String?
+    @State private var writingNote = false
 
     init(suggestion: ActivityTracker.Suggestion, timer: TimerService, now: Date, quickTasks: [TaskType]) {
         self.suggestion = suggestion
@@ -162,19 +221,31 @@ private struct ActivitySuggestionRow: View {
                     Text(title)
                         .font(.title3.weight(.medium))
                         .help(ActivityTracker.abbreviate(suggestion.folder))
-                    TextField("Note, 1–3 words (appears on invoices)", text: $note)
+                    TextField(writingNote ? "Writing a note…" : "Note, 1–3 words (appears on invoices)", text: $note)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 520)
                         .padding(.vertical, 3)
+                        .help(note == writtenNote && !note.isEmpty
+                              ? "Written on this Mac by Apple Intelligence from what you worked on. Change it if you like."
+                              : "Appears on invoices")
                         .onChange(of: suggestion.note) { old, new in
-                            // A label logged while this is on screen joins the note, unless you've changed it.
-                            if note == old { note = new }
+                            // A label logged while this is on screen replaces the note, unless you've changed it.
+                            if note == old || note == writtenNote { note = new }
                         }
+                        // Also tried again when Apple Intelligence becomes ready (the view redraws every 15 seconds).
+                        .task(id: suggestion.worked + [NoteWriter.unavailableReason ?? ""]) { await writeNote() }
                     if !times.isEmpty {
                         Text(times)
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
+                    }
+                    if !suggestion.worked.isEmpty {
+                        Text("Worked on: " + suggestion.worked.joined(separator: " · "))
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .help(suggestion.worked.joined(separator: "\n"))
                     }
                 }
                 Spacer(minLength: 12)
@@ -190,25 +261,7 @@ private struct ActivitySuggestionRow: View {
                 .help("Time to add, e.g. 1:30 or 45m")
             }
 
-            if !quickTasks.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(quickTasks) { quick in
-                            let selected = quick.persistentModelID == task?.persistentModelID
-                            Button { task = quick } label: {
-                                HStack(spacing: 6) {
-                                    Avatar(name: quick.project?.client?.name ?? "?", size: 16, imageData: quick.project?.client?.logoData)
-                                    Text(quick.shortPath).lineLimit(1)
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(selected ? .purple : nil)
-                            .controlSize(.small)
-                            .help(quick.path)
-                        }
-                    }
-                }
-            }
+            QuickTaskChips(tasks: quickTasks, selection: $task, tint: .purple)
 
             HStack(spacing: 10) {
                 TaskPicker(selection: $task, placeholder: "Add to project…")
@@ -262,6 +315,18 @@ private struct ActivitySuggestionRow: View {
             return block.fromCommits ? "\(range) (commits)" : range
         }
         .joined(separator: " · ")
+    }
+
+    /// Fills an empty note from the day's session titles and commits. Labels you logged come first, and a note
+    /// you've typed is never replaced.
+    private func writeNote() async {
+        guard suggestion.note.isEmpty, !suggestion.worked.isEmpty, NoteWriter.unavailableReason == nil else { return }
+        writingNote = note.isEmpty
+        let written = await NoteWriter.shared.note(for: suggestion.worked)
+        writingNote = false
+        guard let written, suggestion.note.isEmpty else { return }
+        if note.isEmpty || note == writtenNote { note = written }
+        writtenNote = written
     }
 
     private func accept() {

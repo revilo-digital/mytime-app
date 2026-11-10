@@ -26,6 +26,8 @@
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>MyTime opens a draft in Mail from your chosen address with the invoice PDF attached.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>MyTime reads your calendars to suggest meetings as time to add to your timesheet. Nothing is changed or sent anywhere.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
 </dict>

@@ -12,11 +12,17 @@ final class ActivityBeat {
     var folder: String
     /// "claude", "cursor", …
     var source: String
+    /// What was being worked on: the Claude Code session's title, or a commit's subject. Empty if unknown.
+    var detail: String = ""
+    /// The tool's session, so a renamed session counts once. Empty if unknown.
+    var session: String = ""
 
-    init(at: Date, folder: String, source: String) {
+    init(at: Date, folder: String, source: String, detail: String = "", session: String = "") {
         self.at = at
         self.folder = folder
         self.source = source
+        self.detail = detail
+        self.session = session
     }
 }
 

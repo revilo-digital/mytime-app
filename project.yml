@@ -31,6 +31,7 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         NSHumanReadableCopyright: ""
         NSAppleEventsUsageDescription: "MyTime opens a draft in Mail from your chosen address with the invoice PDF attached."
+        NSCalendarsFullAccessUsageDescription: "MyTime reads your calendars to suggest meetings as time to add to your timesheet. Nothing is changed or sent anywhere."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: nz.olly.MyTime

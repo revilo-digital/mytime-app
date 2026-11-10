@@ -29,6 +29,19 @@ struct ActivitySettingsView: View {
             }
 
             Section {
+                LabeledContent("Notes") {
+                    Text(NoteWriter.unavailableReason == nil ? "Written by Apple Intelligence" : "Not written for you")
+                }
+            } header: {
+                Text("Notes")
+            } footer: {
+                Text(NoteWriter.unavailableReason
+                     ?? "When a suggestion has no label, Apple Intelligence names the work in 1–3 words from the "
+                     + "day's Claude Code session titles and commits. It runs on this Mac, so nothing is sent anywhere.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
                 if ignored.isEmpty {
                     Text("None").foregroundStyle(.secondary)
                 }

@@ -145,17 +145,29 @@ private struct WeekContent: View {
         ActivityTracker.suggestions(beats, notes: notes, projects: projects)
     }
 
+    @Query private var handled: [HandledMeeting]
+    @AppStorage(MeetingSettings.enabledKey) private var meetingsEnabled = false
+    private let calendars = CalendarStore.shared
+
+    private func meetings(now: Date) -> [MeetingTracker.Suggestion] {
+        let end = Week.end(from: weekStart)
+        return MeetingTracker.suggestions(calendars.events, handled: Set(handled.map(\.key)), projects: projects, now: now)
+            .filter { $0.day >= weekStart && $0.day < end }
+    }
+
     var body: some View {
         TimelineView(.periodic(from: .now, by: 15)) { context in
             switch mode {
             case .day:
                 let suggestions = suggestions
+                let meetings = meetings(now: context.date)
                 VStack(spacing: 0) {
                     DayStrip(weekStart: weekStart, entries: entries, now: context.date,
-                             suggestionDays: Set(suggestions.map(\.day)), selectedDay: $selectedDay)
+                             suggestionDays: Set(suggestions.map(\.day) + meetings.map(\.day)), selectedDay: $selectedDay)
                         .padding(.horizontal, 24)
                         .padding(.bottom, 16)
-                    ActivityReviewBanner(suggestions: suggestions.filter { $0.day == selectedDay })
+                    ActivityReviewBanner(suggestions: suggestions.filter { $0.day == selectedDay },
+                                         meetings: meetings.filter { $0.day == selectedDay })
                     DayEntryList(
                         timer: timer,
                         day: selectedDay,
