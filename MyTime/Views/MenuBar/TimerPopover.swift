@@ -12,7 +12,10 @@ struct TimerPopover: View {
 
     @AppStorage(TimerService.lastTaskKey) private var lastTaskID = ""
     @State private var selectedTask: TaskType?
+    @Environment(\.modelContext) private var context
     @State private var note = ""
+    /// Time typed into "add time already spent" under Start.
+    @State private var manualDuration = ""
     @State private var editingID: PersistentIdentifier?
     @State private var addingEntry = false
     /// Showing the task picker to start another timer while one is running.
@@ -132,10 +135,37 @@ struct TimerPopover: View {
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)
             .disabled(selectedTask == nil || selectedTask.map(isRunning) == true)
+            addTimeRow
             if tasks.isEmpty {
                 Text("Add a client, project and task in MyTime first.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+        }
+    }
+
+    /// Time already spent (a meeting you forgot to time): type it and add it as a finished entry
+    /// for the picked task and note, no timer needed.
+    private var addTimeRow: some View {
+        HStack(spacing: 8) {
+            Text("Or add time already spent").font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            TextField("1:00", text: $manualDuration)
+                .textFieldStyle(.roundedBorder)
+                .monospacedDigit()
+                .frame(width: 60)
+                .onSubmit { addManualEntry() }
+                .help("Hours and minutes, e.g. 1:30, 1.5 or 45m")
+            ForEach([30, 60], id: \.self) { minutes in
+                Button(minutes == 60 ? "+1h" : "+\(minutes)m") {
+                    addManualEntry(seconds: Double(minutes * 60))
+                }
+                .controlSize(.small)
+                .disabled(selectedTask == nil)
+                .help("Add \(minutes == 60 ? "an hour" : "\(minutes) minutes") to today straight away")
+            }
+            Button("Add") { addManualEntry() }
+                .disabled(selectedTask == nil || (manualSeconds ?? 0) <= 0)
+                .help("Add this time to today without running a timer")
         }
     }
 
@@ -233,6 +263,21 @@ struct TimerPopover: View {
         guard let task = selectedTask else { return }
         start(task, note: note, alongside: startingAlongside)
         note = ""
+    }
+
+    private var manualSeconds: TimeInterval? { DurationFormat.parse(manualDuration) }
+
+    /// Adds `seconds` (or the typed time) as a finished entry for the picked task and note.
+    private func addManualEntry(seconds: TimeInterval? = nil) {
+        guard let task = selectedTask, let seconds = seconds ?? manualSeconds, seconds > 0 else { return }
+        let entry = TimeEntry(task: task, date: .now, durationSeconds: seconds, note: note)
+        entry.isBillable = RateResolver.isBillable(task)
+        context.insert(entry)
+        try? context.save()
+        timer.remember(task)
+        lastTaskID = task.uuid.uuidString
+        note = ""
+        manualDuration = ""
     }
 
     private func start(_ task: TaskType, note: String, alongside: Bool = false) {
@@ -566,6 +611,9 @@ private struct PopoverEntryRow: View {
                     Button(minutes > 0 ? "+15m" : "−15m") { nudge(minutes) }
                         .controlSize(.small)
                 }
+                Button("Round up", action: roundUp)
+                    .controlSize(.small)
+                    .help("Round up to the next 15 minutes")
                 Spacer()
                 if parsed == nil {
                     Text("e.g. 1:30").font(.caption).foregroundStyle(.red)
@@ -627,6 +675,12 @@ private struct PopoverEntryRow: View {
     private func nudge(_ minutes: Int) {
         let current = parsed ?? entry.liveDuration()
         durationText = DurationFormat.short(max(0, current + Double(minutes * 60)))
+    }
+
+    /// 0:28 → 0:30, 0:31 → 0:45; a time already on a quarter hour stays put.
+    private func roundUp() {
+        let minutes = Int((parsed ?? entry.liveDuration()) / 60)
+        durationText = DurationFormat.short(Double((minutes + 14) / 15 * 15 * 60))
     }
 
     private func save() {
