@@ -24,7 +24,10 @@ never leaves your machine unless you back it up to iCloud Drive yourself.
     stop at the moment you left.
   - Star tasks (in the popover or on a client's project cards) for one-click starts. The last three other tasks
     you tracked show underneath.
-  - Edit, add or delete today's entries without opening the main window.
+  - Forgot to start the timer? Under Start, type the time you spent (or click +30m or +1h) to add a finished
+    entry for the picked task straight away.
+  - Edit, add or delete today's entries without opening the main window. The entry editor can round a time up to
+    the next 15 minutes.
   - Global shortcuts: <kbd>⌥⌘T</kbd> opens the timer and <kbd>⌥⌘S</kbd> starts the last task, or stops every running timer.
   - Running timers survive quitting, sleep, crashes and reboots. Only the start timestamp is stored, and
     elapsed time is always worked out from it.
