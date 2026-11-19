@@ -71,6 +71,7 @@ struct NewInvoiceSheet: View {
     @State private var customTo = Date.now
     @AppStorage("invoiceGrouping") private var grouping: LineGrouping = .projectTask
     @AppStorage("invoiceLineDetails") private var detailsRaw = LineDetails.standard.rawValue
+    @AppStorage("invoiceSummariseNotes") private var summariseNotes = true
     @AppStorage("invoiceByEndClient") private var byEndClient = true
 
     @State private var actions: [PersistentIdentifier: EntryAction] = [:]
@@ -370,12 +371,26 @@ struct NewInvoiceSheet: View {
                             detailToggle("Date", .date)
                             detailToggle("Notes", .notes)
                         }
+                        summariseToggle
                     }
                 }
             }
             .card(padding: 20)
 
             reviewEntries
+        }
+    }
+
+    private var summariseToggle: some View {
+        let reason = LineSummariser.unavailableReason
+        let notes = LineDetails(rawValue: detailsRaw).contains(.notes) && grouping != .entry
+        return VStack(alignment: .leading, spacing: 2) {
+            Toggle("Summarise notes with Apple Intelligence", isOn: $summariseNotes)
+                .toggleStyle(.checkbox)
+                .disabled(reason != nil || !notes)
+            Text(reason ?? "Each line's notes become one phrase covering all its time, so a note that covers part of the hours doesn't read as all of them. You can edit it or put the notes back.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -680,6 +695,9 @@ struct NewInvoiceSheet: View {
             settings: settings,
             context: context
         )
+        if summariseNotes, LineSummariser.unavailableReason == nil {
+            Task { await LineSummariser.shared.summarise(invoice) }
+        }
         onCreate(invoice)
         dismiss()
     }

@@ -89,6 +89,41 @@ struct InvoiceBuilderTests {
         #expect(lines[2].details == "Standup")
     }
 
+    @Test func lineBriefKeepsEachNotesTimeAndTheTimeWithoutNotes() throws {
+        let entries = [
+            entry(dev, minutes: 180),
+            entry(dev, minutes: 60),
+            entry(dev, minutes: 180, note: "Thornton data issue"),
+            entry(dev, minutes: 30, note: "thornton data issue"),
+            entry(meetings, minutes: 60),
+        ]
+        let lines = InvoiceBuilder.hourlyLines(for: entries, grouping: .task, roundingMinutes: 0,
+                                               include: [.project, .task, .date, .notes])
+        let brief = try #require(lines[0].brief)
+        #expect(brief == LineBrief(task: "Support - Dev", dates: DateText.short(day),
+                                   notes: [.init(text: "Thornton data issue", minutes: 210)], unnotedMinutes: 240))
+        #expect(lines[0].details == "\(DateText.short(day)) · Thornton data issue")
+        #expect(brief.notesDetails == lines[0].details)
+        #expect(brief.details(summary: "Reporting") == "\(DateText.short(day)) · Reporting")
+        // No notes, nothing to summarise from: the line keeps just its date.
+        #expect(lines[1].brief == nil)
+        #expect(lines[1].details == DateText.short(day))
+    }
+
+    @Test func notesDifferingByAFullStopAreTheSame() {
+        #expect(InvoiceBuilder.sameNote("Early termination planning.", "early termination planning"))
+        #expect(!InvoiceBuilder.sameNote("Planning", "Planning call"))
+    }
+
+    @Test func createdLinesKeepTheirBrief() throws {
+        let bill = [entry(dev, minutes: 60, note: "Login fix"), entry(dev, minutes: 30)]
+        let invoice = InvoiceBuilder.createInvoice(client: client, bill: bill, cover: [], grouping: .task,
+                                                   fixedLines: [], settings: settings, context: context)
+        let brief = try #require(invoice.sortedLines.first?.brief)
+        #expect(brief.notes == [.init(text: "Login fix", minutes: 60)])
+        #expect(brief.unnotedMinutes == 30)
+    }
+
     @Test func projectGroupingStillSplitsByRate() {
         let entries = [entry(dev, minutes: 60), entry(meetings, minutes: 60)]
         let lines = InvoiceBuilder.hourlyLines(for: entries, grouping: .project, roundingMinutes: 0)

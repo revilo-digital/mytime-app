@@ -90,6 +90,9 @@ final class InvoiceLine {
     var groupTitle: String = ""
     /// Secondary text under the description, e.g. deduplicated entry notes.
     var details: String = ""
+    /// The notes and times `details` was written from (a `LineBrief` as JSON), so it can be summarised or
+    /// put back. Nil for fixed lines, lines without notes, and lines made before this was kept.
+    var briefData: Data?
     /// Hours for hourly lines; nil for fixed lines.
     var quantity: Decimal?
     var unitPrice: Decimal
@@ -99,6 +102,11 @@ final class InvoiceLine {
     var kind: InvoiceLineKind {
         get { InvoiceLineKind(rawValue: kindRaw) ?? .fixed }
         set { kindRaw = newValue.rawValue }
+    }
+
+    var brief: LineBrief? {
+        get { briefData.flatMap { try? JSONDecoder().decode(LineBrief.self, from: $0) } }
+        set { briefData = newValue.flatMap { try? JSONEncoder().encode($0) } }
     }
 
     init(kind: InvoiceLineKind, description: String, quantity: Decimal?, unitPrice: Decimal, amount: Decimal, sortOrder: Int,

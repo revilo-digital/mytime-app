@@ -142,6 +142,15 @@ struct InvoiceDetailView: View {
     private var linesCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(title: "Lines") {
+                if editable, LineSummariser.unavailableReason == nil,
+                   invoice.lines.contains(where: { $0.brief.map(LineSummariser.canSummarise) ?? false }) {
+                    Button {
+                        Task { await LineSummariser.shared.summarise(invoice) }
+                    } label: { Label("Summarise Notes", systemImage: "sparkles") }
+                        .buttonStyle(.bordered)
+                        .disabled(!LineSummariser.shared.working.isEmpty)
+                        .help("Write each line's notes as one phrase covering all its time. Lines you've edited are left alone.")
+                }
                 if editable {
                     Button {
                         let line = InvoiceLine(kind: .fixed, description: "", quantity: nil, unitPrice: 0, amount: 0,
@@ -362,10 +371,13 @@ private struct LineRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 TextField("Description", text: $line.lineDescription, axis: .vertical).labelsHidden()
                 if !line.details.isEmpty || editable {
-                    TextField("Details", text: $line.details, axis: .vertical)
-                        .labelsHidden()
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        TextField("Details", text: $line.details, axis: .vertical)
+                            .labelsHidden()
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if editable { summaryControl }
+                    }
                 }
             }
             .padding(.leading, line.groupTitle.isEmpty ? 0 : 12)
@@ -387,5 +399,39 @@ private struct LineRow: View {
             }
         }
         .disabled(!editable)
+    }
+
+    /// Writes the details as one phrase covering all the line's time, or puts the timesheet notes back.
+    @ViewBuilder private var summaryControl: some View {
+        let summariser = LineSummariser.shared
+        if summariser.working.contains(line.persistentModelID) {
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.mini)
+                Text("Summarising…").font(.caption).foregroundStyle(.secondary)
+            }
+            .fixedSize()
+        } else if let brief = line.brief, LineSummariser.canSummarise(brief) {
+            let reason = LineSummariser.unavailableReason
+            Menu {
+                Button("Summarise with Apple Intelligence", systemImage: "sparkles") {
+                    Task { await summariser.summarise(line) }
+                }
+                .disabled(reason != nil)
+                Button("Use Timesheet Notes", systemImage: "list.bullet") { summariser.restoreNotes(line) }
+                    .disabled(line.details == brief.notesDetails)
+                if let reason { Text(reason) }
+            } label: {
+                Image(systemName: "sparkles")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help(summariser.failures[line.persistentModelID] ?? "Summarise this line's notes")
+            if summariser.failures[line.persistentModelID] != nil {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .help(summariser.failures[line.persistentModelID] ?? "")
+            }
+        }
     }
 }

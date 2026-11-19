@@ -59,6 +59,11 @@ struct TimerPopover: View {
                     .buttonStyle(.borderless)
                     .font(.callout)
                     .help("Start a second timer without stopping this one — both record their full time")
+                    // Start is hidden while timing, so offer the add-time row with its own task picker.
+                    VStack(alignment: .leading, spacing: 8) {
+                        TaskPicker(selection: $selectedTask).labelsHidden()
+                        addTimeRow
+                    }
                 }
             } else {
                 startView
@@ -147,7 +152,7 @@ struct TimerPopover: View {
     /// for the picked task and note, no timer needed.
     private var addTimeRow: some View {
         HStack(spacing: 8) {
-            Text("Or add time already spent").font(.caption).foregroundStyle(.secondary)
+            Text("Add time already spent").font(.caption).foregroundStyle(.secondary)
             Spacer()
             TextField("1:00", text: $manualDuration)
                 .textFieldStyle(.roundedBorder)

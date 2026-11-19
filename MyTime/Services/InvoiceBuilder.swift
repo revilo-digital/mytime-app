@@ -71,6 +71,34 @@ struct LineSpec: Equatable {
     var sectionTitle: String = ""
     var kind: InvoiceLineKind = .hourly
     var project: Project?
+    /// What the line's details are written from, for lines that combine entries and show their notes.
+    var brief: LineBrief?
+}
+
+/// The time behind one hourly line: its notes with the minutes each covered, and the minutes with no note.
+/// `LineSummariser` writes the line's details from it, and `notesDetails` gives the plain notes back.
+struct LineBrief: Codable, Equatable {
+    struct Note: Codable, Equatable {
+        var text: String
+        var minutes: Int
+    }
+
+    /// The line's description, e.g. "Consultancy - 6. Analytics & reporting".
+    var task: String
+    /// The date or date range shown before the notes, if dates are included.
+    var dates: String?
+    var notes: [Note]
+    var unnotedMinutes: Int
+
+    /// The details as first written: the dates, then each note.
+    var notesDetails: String { details(notes.map(\.text)) }
+
+    /// The details with `summary` in place of the notes.
+    func details(summary: String) -> String { details([summary]) }
+
+    private func details(_ text: [String]) -> String {
+        ([dates].compactMap { $0 } + text).joined(separator: " · ")
+    }
 }
 
 @MainActor
@@ -150,17 +178,23 @@ enum InvoiceBuilder {
 
         var order: [Key] = []
         var minutes: [Key: Int] = [:]
-        var notes: [Key: [String]] = [:]
+        var notes: [Key: [LineBrief.Note]] = [:]
+        var unnoted: [Key: Int] = [:]
         var dates: [Key: (Date, Date)] = [:]
         for (index, entry) in sorted.enumerated() {
             let k = key(entry, index: index)
             if minutes[k] == nil { order.append(k) }
             let span = dates[k] ?? (entry.date, entry.date)
             dates[k] = (min(span.0, entry.date), max(span.1, entry.date))
-            minutes[k, default: 0] += billableMinutes(entry, roundingMinutes: roundingMinutes)
+            let billable = billableMinutes(entry, roundingMinutes: roundingMinutes)
+            minutes[k, default: 0] += billable
             let note = entry.note.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !note.isEmpty, notes[k, default: []].contains(where: { $0.caseInsensitiveCompare(note) == .orderedSame }) == false {
-                notes[k, default: []].append(note)
+            if note.isEmpty {
+                unnoted[k, default: 0] += billable
+            } else if let same = notes[k, default: []].firstIndex(where: { Self.sameNote($0.text, note) }) {
+                notes[k]![same].minutes += billable
+            } else {
+                notes[k, default: []].append(LineBrief.Note(text: note, minutes: billable))
             }
         }
 
@@ -176,18 +210,22 @@ enum InvoiceBuilder {
 
         return order.map { k in
             let qty = Decimal(minutes[k] ?? 0) / 60
-            var details: [String] = []
+            var dateText: String?
+            var brief: LineBrief?
             if grouping != .entry {
                 if include.contains(.date), let (first, last) = dates[k] {
-                    details.append(first == last ? DateText.short(first) : "\(DateText.short(first)) – \(DateText.short(last))")
+                    dateText = first == last ? DateText.short(first) : "\(DateText.short(first)) – \(DateText.short(last))"
                 }
-                if include.contains(.notes) { details += notes[k] ?? [] }
+                if include.contains(.notes), let notes = notes[k] {
+                    brief = LineBrief(task: k.label, dates: dateText, notes: notes, unnotedMinutes: unnoted[k] ?? 0)
+                }
             }
             return LineSpec(
                 description: k.label, hours: qty, rate: k.rate, amount: amount(hours: qty, rate: k.rate),
                 groupTitle: k.group,
-                details: details.joined(separator: " · "),
-                sectionTitle: k.section
+                details: brief?.notesDetails ?? dateText ?? "",
+                sectionTitle: k.section,
+                brief: brief
             )
         }
     }
@@ -221,6 +259,12 @@ enum InvoiceBuilder {
             return a.offset < b.offset
         }
         .map(\.element)
+    }
+
+    /// Notes that differ only in case or a full stop at the end ("Planning." and "planning") are the same note.
+    static func sameNote(_ a: String, _ b: String) -> Bool {
+        func bare(_ s: String) -> String { s.hasSuffix(".") ? String(s.dropLast()) : s }
+        return bare(a).caseInsensitiveCompare(bare(b)) == .orderedSame
     }
 
     // MARK: Choosing projects
@@ -281,6 +325,7 @@ enum InvoiceBuilder {
                                    groupTitle: spec.groupTitle, details: spec.details, sectionTitle: spec.sectionTitle)
             line.invoice = invoice
             line.project = spec.project
+            line.brief = spec.brief
             context.insert(line)
         }
 
